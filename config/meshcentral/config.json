@@ -1,0 +1,223 @@
+{
+  "$schema": "https://raw.githubusercontent.com/Ylianst/MeshCentral/master/meshcentral-config-schema.json",
+  
+  "_comment_settings": "MeshCentral Configuration - Edit values marked with CHANGE_THIS",
+  
+  "settings": {
+    "_comment_cert": "Certificate settings - domain must match your actual domain",
+    "cert": "CHANGE_THIS_DOMAIN.COM",
+    "port": 443,
+    "aliasPort": 443,
+    "redirPort": 80,
+    "redirAliasPort": 80,
+    
+    "_comment_agent": "Agent connection settings",
+    "agentPort": 443,
+    "agentAliasPort": 443,
+    "agentAliasDNS": "CHANGE_THIS_DOMAIN.COM",
+    
+    "_comment_tls": "TLS settings - modern secure configuration",
+    "tlsOffload": "nginx",
+    "trustedProxy": "nginx",
+    "exactProxy": true,
+    
+    "_comment_security": "Security settings",
+    "allowFraming": false,
+    "allowLoginToken": true,
+    "allowHighQualityDesktop": true,
+    "agentCoreDump": false,
+    "nice404": false,
+    "clickOnce": false,
+    
+    "_comment_sessions": "Session settings",
+    "sessionTime": 60,
+    "sessionKey": "CHANGE_THIS_RANDOM_SESSION_KEY_32_CHARS_MIN",
+    "sessionSameSite": "strict",
+    
+    "_comment_database": "Database settings - using built-in NeDB",
+    "_comment_mongodb": "For MongoDB, uncomment and configure below",
+    
+    "_comment_performance": "Performance settings",
+    "maxInvalidLogin": {
+      "time": 10,
+      "count": 5,
+      "coolofftime": 30
+    },
+    "agentUpdateBlockSize": 65536,
+    "compression": true,
+    "wscompression": true,
+    "agentwscompression": true,
+    
+    "_comment_features": "Feature toggles",
+    "allowSelfSignedAgentCert": true,
+    "agentAutoConnect": true,
+    "localDiscovery": false,
+    "webRTC": false,
+    "plugins": {
+      "enabled": false
+    }
+  },
+  
+  "domains": {
+    "": {
+      "_comment_domain": "Default domain configuration",
+      "title": "Remote Support",
+      "title2": "Secure Remote Access Portal",
+      
+      "_comment_branding": "Branding - customize these",
+      "welcomeText": "Welcome to Remote Support Portal",
+      "welcomePicture": "",
+      "loginLogo": "",
+      "headerLogo": "",
+      "footer": "",
+      
+      "_comment_registration": "User registration settings",
+      "newAccounts": false,
+      "newAccountsUserGroups": [],
+      "userNameIsEmail": true,
+      "newAccountEmailDomains": [],
+      "newAccountsRights": [],
+      
+      "_comment_password": "Password requirements",
+      "passwordRequirements": {
+        "min": 12,
+        "max": 128,
+        "upper": 1,
+        "lower": 1,
+        "numeric": 1,
+        "nonalpha": 1,
+        "reset": 90,
+        "force2factor": false,
+        "skip2factor": ""
+      },
+      
+      "_comment_auth": "Authentication settings",
+      "auth": "sspi",
+      "localSessionRecording": true,
+      "minify": true,
+      "allowSavingDeviceCredentials": true,
+      
+      "_comment_2fa": "Two-factor authentication",
+      "yubikey": false,
+      "httpHeaders": {
+        "Strict-Transport-Security": "max-age=31536000; includeSubDomains"
+      },
+      
+      "_comment_session_recording": "Session recording settings",
+      "sessionRecording": {
+        "onlySelectedUsers": false,
+        "onlySelectedUserGroups": false,
+        "onlySelectedDeviceGroups": false,
+        "filepath": "meshcentral-files/recordings",
+        "index": true,
+        "maxRecordings": 100,
+        "maxRecordingSizeMegabytes": 100,
+        "deleteOldRecordings": true
+      },
+      
+      "_comment_email": "Email settings for notifications - configure if needed",
+      "_email": {
+        "smtp": {
+          "host": "smtp.example.com",
+          "port": 587,
+          "secure": false,
+          "auth": {
+            "user": "user@example.com",
+            "pass": "CHANGE_THIS_EMAIL_PASSWORD"
+          },
+          "tls": {
+            "rejectUnauthorized": true
+          }
+        },
+        "from": "support@example.com"
+      },
+      
+      "_comment_features": "Feature settings",
+      "geoLocation": false,
+      "novnc": true,
+      "mstsc": true,
+      "ssh": true,
+      "altMessaging": false,
+      
+      "_comment_limits": "Resource limits",
+      "limits": {
+        "maxDevices": 1000,
+        "maxUserAccounts": 100,
+        "maxUserSessions": 10,
+        "maxAgentSessions": 10,
+        "maxSingleUserSessions": 10
+      },
+      
+      "_comment_device_groups": "Default device group settings",
+      "deviceGroupTypes": [
+        "computers",
+        "servers"
+      ],
+      
+      "_comment_ui": "User interface settings",
+      "ui": {
+        "hide": [],
+        "logo": ""
+      },
+      
+      "_comment_notifications": "Desktop notifications",
+      "desktopPrivacyBarText": "Remote session in progress - {0}",
+      "notificationMessages": {
+        "desktopNotify": "Remote session started by {0}",
+        "terminalNotify": "Terminal session started by {0}",
+        "fileNotify": "File access started by {0}"
+      },
+      
+      "_comment_agent": "Agent settings",
+      "agentConfig": [
+        "webSocketMaskOverride=0"
+      ],
+      
+      "_comment_custom_ui": "Custom UI elements",
+      "customUI": {},
+      
+      "_comment_consent": "User consent settings",
+      "consentMessages": {
+        "title": "Remote Access Request",
+        "desktop": "{0} is requesting remote desktop access.",
+        "terminal": "{0} is requesting terminal access.",
+        "files": "{0} is requesting file access.",
+        "consentTimeout": 30,
+        "autoAccept": false
+      }
+    }
+  },
+  
+  "_peerstats": {
+    "_comment": "Peer statistics - disabled for privacy",
+    "enabled": false
+  },
+  
+  "_letsEncrypt": {
+    "_comment": "Let's Encrypt - handled by nginx/certbot instead",
+    "email": "",
+    "names": "",
+    "production": false
+  },
+  
+  "_firebase": {
+    "_comment": "Push notifications - configure if needed",
+    "serverKey": ""
+  },
+  
+  "_smtp": {
+    "_comment": "SMTP for password recovery - configure if needed",
+    "host": "",
+    "port": 587,
+    "from": ""
+  },
+  
+  "_authStrategies": {
+    "_comment": "External auth providers - configure if needed",
+    "_twitter": {},
+    "_google": {},
+    "_github": {},
+    "_azure": {},
+    "_oidc": {}
+  }
+}

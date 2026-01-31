@@ -1,280 +1,168 @@
 /**
- * Configuration Manager
+ * Admin Dashboard Server
  * 
- * Handles loading, saving, and validating settings.
- * Settings are stored in a JSON file for simplicity and portability.
+ * Express server for the admin dashboard.
+ * Provides REST API for managing modules and settings.
  * 
- * Features:
- *   - Auto-creates data directory and default settings
- *   - Validates settings before saving
- *   - Supports nested settings paths
- *   - Thread-safe writes with atomic file operations
+ * Endpoints:
+ *   /api/modules         - List/manage modules
+ *   /api/settings        - Global settings
+ *   /api/webhook         - Incoming webhooks
  */
 
-const fs = require('fs').promises;
+const express = require('express');
+const cors = require('cors');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
 const path = require('path');
 
-// ==============================================================================
-// Default Settings
-// ==============================================================================
-
-const DEFAULT_SETTINGS = {
-  // Meta
-  _version: '1.0.0',
-  _lastModified: null,
-  
-  // General
-  general: {
-    siteName: 'Remote Support',
-    siteDescription: 'Secure Remote Access Portal',
-    adminEmail: '',
-    timezone: 'UTC'
-  },
-  
-  // Modules are registered dynamically
-  modules: {}
-};
+const ConfigManager = require('./config');
+const ModuleLoader = require('./modules/loader');
+const apiRoutes = require('./routes/api');
 
 // ==============================================================================
-// ConfigManager Class
+// Configuration
 // ==============================================================================
 
-class ConfigManager {
-  /**
-   * Create a new ConfigManager
-   * @param {string} dataPath - Directory to store settings
-   */
-  constructor(dataPath) {
-    this.dataPath = dataPath;
-    this.settingsFile = path.join(dataPath, 'settings.json');
-    this.settings = null;
-    this.initialized = false;
+const PORT = process.env.PORT || 3001;
+const DATA_PATH = process.env.DATA_PATH || path.join(__dirname, 'data');
+const NODE_ENV = process.env.NODE_ENV || 'development';
+
+// ==============================================================================
+// Initialize App
+// ==============================================================================
+
+const app = express();
+
+// ==============================================================================
+// Middleware
+// ==============================================================================
+
+// Security headers
+app.use(helmet({
+  contentSecurityPolicy: false, // Allow inline scripts for dashboard
+  crossOriginEmbedderPolicy: false
+}));
+
+// CORS
+app.use(cors({
+  origin: true,
+  credentials: true
+}));
+
+// Rate limiting
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // Limit each IP to 100 requests per windowMs
+  message: { error: 'Too many requests, please try again later.' }
+});
+app.use('/api/', limiter);
+
+// Body parsing
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true }));
+
+// Request logging
+if (NODE_ENV !== 'production') {
+  app.use((req, res, next) => {
+    console.log(`${new Date().toISOString()} ${req.method} ${req.path}`);
+    next();
+  });
+}
+
+// ==============================================================================
+// Static Files
+// ==============================================================================
+
+// Serve frontend
+app.use(express.static(path.join(__dirname, 'frontend')));
+
+// ==============================================================================
+// API Routes
+// ==============================================================================
+
+app.use('/api', apiRoutes);
+
+// ==============================================================================
+// SPA Fallback
+// ==============================================================================
+
+app.get('*', (req, res) => {
+  // Don't fallback for API routes
+  if (req.path.startsWith('/api/')) {
+    return res.status(404).json({ error: 'Not found' });
   }
-  
-  /**
-   * Initialize the config manager
-   * Creates data directory and loads/creates settings file
-   */
-  async init() {
-    // Ensure data directory exists
-    await fs.mkdir(this.dataPath, { recursive: true });
+  res.sendFile(path.join(__dirname, 'frontend', 'index.html'));
+});
+
+// ==============================================================================
+// Error Handler
+// ==============================================================================
+
+app.use((err, req, res, next) => {
+  console.error('Server error:', err);
+  res.status(500).json({
+    error: NODE_ENV === 'production' ? 'Internal server error' : err.message
+  });
+});
+
+// ==============================================================================
+// Initialize and Start
+// ==============================================================================
+
+async function start() {
+  try {
+    console.log('');
+    console.log('═══════════════════════════════════════════════════════════════');
+    console.log('  Admin Dashboard Server');
+    console.log('═══════════════════════════════════════════════════════════════');
     
-    // Load or create settings
-    try {
-      const data = await fs.readFile(this.settingsFile, 'utf8');
-      this.settings = JSON.parse(data);
-      
-      // Merge with defaults to ensure all keys exist
-      this.settings = this._mergeDefaults(this.settings, DEFAULT_SETTINGS);
-    } catch (error) {
-      if (error.code === 'ENOENT') {
-        // File doesn't exist, create with defaults
-        this.settings = { ...DEFAULT_SETTINGS };
-        await this._save();
-      } else {
-        throw error;
-      }
-    }
+    // Initialize ConfigManager
+    console.log('  Initializing configuration manager...');
+    const configManager = new ConfigManager(DATA_PATH);
+    await configManager.init();
     
-    this.initialized = true;
-  }
-  
-  /**
-   * Get all settings
-   * @returns {object} All settings
-   */
-  getAll() {
-    this._checkInitialized();
-    return { ...this.settings };
-  }
-  
-  /**
-   * Get a specific setting by path
-   * @param {string} path - Dot-notation path (e.g., 'modules.telegram.enabled')
-   * @param {any} defaultValue - Default value if path doesn't exist
-   * @returns {any} The setting value
-   */
-  get(path, defaultValue = null) {
-    this._checkInitialized();
+    // Initialize ModuleLoader
+    console.log('  Loading modules...');
+    const moduleLoader = new ModuleLoader(configManager);
+    await moduleLoader.loadAll();
     
-    const parts = path.split('.');
-    let current = this.settings;
+    // Make available to routes
+    app.locals.configManager = configManager;
+    app.locals.moduleLoader = moduleLoader;
     
-    for (const part of parts) {
-      if (current === null || current === undefined || typeof current !== 'object') {
-        return defaultValue;
-      }
-      current = current[part];
-    }
+    // Start server
+    app.listen(PORT, '0.0.0.0', () => {
+      console.log('');
+      console.log(`  Environment: ${NODE_ENV}`);
+      console.log(`  Port:        ${PORT}`);
+      console.log(`  Data Path:   ${DATA_PATH}`);
+      console.log(`  Modules:     ${moduleLoader.getModuleList().map(m => m.name).join(', ')}`);
+      console.log('');
+      console.log('  Status: Running ✓');
+      console.log('═══════════════════════════════════════════════════════════════');
+      console.log('');
+    });
     
-    return current !== undefined ? current : defaultValue;
-  }
-  
-  /**
-   * Set a specific setting by path
-   * @param {string} path - Dot-notation path
-   * @param {any} value - Value to set
-   */
-  async set(path, value) {
-    this._checkInitialized();
-    
-    const parts = path.split('.');
-    let current = this.settings;
-    
-    // Navigate to parent
-    for (let i = 0; i < parts.length - 1; i++) {
-      const part = parts[i];
-      if (!(part in current) || typeof current[part] !== 'object') {
-        current[part] = {};
-      }
-      current = current[part];
-    }
-    
-    // Set value
-    current[parts[parts.length - 1]] = value;
-    
-    // Update last modified
-    this.settings._lastModified = new Date().toISOString();
-    
-    await this._save();
-  }
-  
-  /**
-   * Get settings for a specific module
-   * @param {string} moduleName - Module name
-   * @returns {object} Module settings
-   */
-  getModuleSettings(moduleName) {
-    return this.get(`modules.${moduleName}`, {});
-  }
-  
-  /**
-   * Save settings for a specific module
-   * @param {string} moduleName - Module name
-   * @param {object} settings - Settings to save
-   */
-  async saveModuleSettings(moduleName, settings) {
-    await this.set(`modules.${moduleName}`, settings);
-  }
-  
-  /**
-   * Register a module with default settings
-   * @param {string} moduleName - Module name
-   * @param {object} defaultSettings - Default settings for the module
-   */
-  async registerModule(moduleName, defaultSettings) {
-    const existing = this.getModuleSettings(moduleName);
-    
-    if (Object.keys(existing).length === 0) {
-      // No existing settings, use defaults
-      await this.saveModuleSettings(moduleName, defaultSettings);
-    } else {
-      // Merge existing with defaults
-      const merged = this._mergeDefaults(existing, defaultSettings);
-      await this.saveModuleSettings(moduleName, merged);
-    }
-  }
-  
-  /**
-   * Delete settings for a module
-   * @param {string} moduleName - Module name
-   */
-  async deleteModuleSettings(moduleName) {
-    if (this.settings.modules && this.settings.modules[moduleName]) {
-      delete this.settings.modules[moduleName];
-      await this._save();
-    }
-  }
-  
-  /**
-   * Export all settings (for backup)
-   * @returns {string} JSON string of all settings
-   */
-  export() {
-    this._checkInitialized();
-    return JSON.stringify(this.settings, null, 2);
-  }
-  
-  /**
-   * Import settings (from backup)
-   * @param {string} jsonString - JSON string of settings
-   */
-  async import(jsonString) {
-    this._checkInitialized();
-    
-    const imported = JSON.parse(jsonString);
-    
-    // Validate structure
-    if (typeof imported !== 'object') {
-      throw new Error('Invalid settings format');
-    }
-    
-    // Merge with defaults
-    this.settings = this._mergeDefaults(imported, DEFAULT_SETTINGS);
-    this.settings._lastModified = new Date().toISOString();
-    
-    await this._save();
-  }
-  
-  // ==============================================================================
-  // Private Methods
-  // ==============================================================================
-  
-  /**
-   * Check if manager is initialized
-   * @private
-   */
-  _checkInitialized() {
-    if (!this.initialized) {
-      throw new Error('ConfigManager not initialized. Call init() first.');
-    }
-  }
-  
-  /**
-   * Save settings to file
-   * @private
-   */
-  async _save() {
-    const tempFile = `${this.settingsFile}.tmp`;
-    
-    // Write to temp file first (atomic write)
-    await fs.writeFile(tempFile, JSON.stringify(this.settings, null, 2), 'utf8');
-    
-    // Rename to actual file
-    await fs.rename(tempFile, this.settingsFile);
-  }
-  
-  /**
-   * Merge settings with defaults (deep merge)
-   * @private
-   * @param {object} settings - Current settings
-   * @param {object} defaults - Default settings
-   * @returns {object} Merged settings
-   */
-  _mergeDefaults(settings, defaults) {
-    const result = { ...defaults };
-    
-    for (const key in settings) {
-      if (settings.hasOwnProperty(key)) {
-        if (
-          typeof settings[key] === 'object' &&
-          settings[key] !== null &&
-          !Array.isArray(settings[key]) &&
-          typeof defaults[key] === 'object' &&
-          defaults[key] !== null &&
-          !Array.isArray(defaults[key])
-        ) {
-          // Deep merge objects
-          result[key] = this._mergeDefaults(settings[key], defaults[key]);
-        } else {
-          // Use setting value
-          result[key] = settings[key];
-        }
-      }
-    }
-    
-    return result;
+  } catch (error) {
+    console.error('Failed to start server:', error);
+    process.exit(1);
   }
 }
 
-module.exports = ConfigManager;
+// ==============================================================================
+// Graceful Shutdown
+// ==============================================================================
+
+process.on('SIGTERM', () => {
+  console.log('Received SIGTERM, shutting down gracefully...');
+  process.exit(0);
+});
+
+process.on('SIGINT', () => {
+  console.log('Received SIGINT, shutting down gracefully...');
+  process.exit(0);
+});
+
+// Start the server
+start();

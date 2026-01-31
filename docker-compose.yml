@@ -148,6 +148,93 @@ services:
           memory: ${NGINX_MEMORY_RESERVATION:-64M}
 
   # ============================================================================
+  # Admin Dashboard - Settings & Configuration UI
+  # ============================================================================
+  admin:
+    build:
+      context: ./admin
+      dockerfile: Dockerfile
+    container_name: ${PROJECT_NAME:-remote-support}-admin
+    restart: unless-stopped
+    
+    environment:
+      - NODE_ENV=${ENVIRONMENT:-production}
+      - PORT=${ADMIN_PORT:-3001}
+      - DATA_PATH=/app/data
+      - AUTH_SECRET=${ADMIN_AUTH_SECRET:-}
+      - TZ=${TZ:-UTC}
+    
+    volumes:
+      # Persistent settings storage
+      - ${DATA_PATH:-./data}/admin:/app/data
+    
+    networks:
+      - internal
+    
+    expose:
+      - "${ADMIN_PORT:-3001}"
+    
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:${ADMIN_PORT:-3001}/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    
+    logging:
+      driver: "json-file"
+      options:
+        max-size: ${LOG_MAX_SIZE:-10m}
+        max-file: ${LOG_MAX_FILES:-3}
+    
+    deploy:
+      resources:
+        limits:
+          memory: ${ADMIN_MEMORY_LIMIT:-128M}
+        reservations:
+          memory: ${ADMIN_MEMORY_RESERVATION:-64M}
+
+  # ============================================================================
+  # Notification Service - Telegram/Webhook Notifications
+  # ============================================================================
+  notifications:
+    build:
+      context: ./services/notifications
+      dockerfile: Dockerfile
+    container_name: ${PROJECT_NAME:-remote-support}-notifications
+    restart: unless-stopped
+    
+    environment:
+      - NOTIFY_PORT=3000
+      - TELEGRAM_ENABLED=${TELEGRAM_ENABLED:-false}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+      - NOTIFY_DEVICE_CONNECT=${NOTIFY_DEVICE_CONNECT:-true}
+      - NOTIFY_DEVICE_DISCONNECT=${NOTIFY_DEVICE_DISCONNECT:-true}
+      - NOTIFY_USER_LOGIN=${NOTIFY_USER_LOGIN:-false}
+      - NOTIFY_USER_LOGOUT=${NOTIFY_USER_LOGOUT:-false}
+      - TZ=${TZ:-UTC}
+    
+    networks:
+      - internal
+    
+    expose:
+      - "3000"
+    
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    
+    logging:
+      driver: "json-file"
+      options:
+        max-size: ${LOG_MAX_SIZE:-10m}
+        max-file: ${LOG_MAX_FILES:-3}
+
+  # ============================================================================
   # Certbot - Let's Encrypt SSL
   # ============================================================================
   certbot:

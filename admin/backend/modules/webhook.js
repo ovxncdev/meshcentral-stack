@@ -41,6 +41,11 @@ class WebhookModule extends BaseModule {
       incomingEnabled: true,
       incomingSecret: this._generateSecret(),
       
+      // Webhook endpoint configuration
+      webhookProtocol: 'http',
+      webhookHost: 'admin',
+      webhookPort: '',
+      
       // Outgoing webhooks (to external services)
       outgoingEnabled: false,
       outgoingWebhooks: [],
@@ -89,6 +94,38 @@ class WebhookModule extends BaseModule {
         type: 'password',
         label: 'Webhook Secret',
         description: 'Secret key to verify webhook requests (auto-generated)',
+        dependsOn: 'incomingEnabled'
+      },
+      {
+        key: 'section_endpoint',
+        type: 'section',
+        label: 'Webhook Endpoint Configuration'
+      },
+      {
+        key: 'webhookProtocol',
+        type: 'select',
+        label: 'Protocol',
+        description: 'Protocol for webhook URL',
+        options: [
+          { value: 'http', label: 'HTTP' },
+          { value: 'https', label: 'HTTPS' }
+        ],
+        dependsOn: 'incomingEnabled'
+      },
+      {
+        key: 'webhookHost',
+        type: 'text',
+        label: 'Webhook Host',
+        description: 'Hostname or IP for webhook URL (use "admin" for Docker internal, or your server IP for external)',
+        placeholder: 'admin or 192.168.1.100',
+        dependsOn: 'incomingEnabled'
+      },
+      {
+        key: 'webhookPort',
+        type: 'text',
+        label: 'Webhook Port',
+        description: 'Port number for webhook URL (leave empty to use default)',
+        placeholder: '3001',
         dependsOn: 'incomingEnabled'
       },
       {
@@ -565,11 +602,17 @@ class WebhookModule extends BaseModule {
    */
   getMeshCentralConfig() {
     const settings = this.getSettings();
+    const webhookHost = settings.webhookHost || 'admin';
+    const webhookPort = settings.webhookPort || process.env.PORT || 3001;
+    const webhookProtocol = settings.webhookProtocol || 'http';
+    
+    const baseUrl = `${webhookProtocol}://${webhookHost}:${webhookPort}/api/webhook/meshcentral`;
+    const secretParam = settings.incomingSecret ? `?secret=${settings.incomingSecret}` : '';
     
     return {
       webhooks: {
-        serverConnect: `http://admin:3001/api/webhook/meshcentral?secret=${settings.incomingSecret}`,
-        serverDisconnect: `http://admin:3001/api/webhook/meshcentral?secret=${settings.incomingSecret}`
+        serverConnect: `${baseUrl}${secretParam}`,
+        serverDisconnect: `${baseUrl}${secretParam}`
       }
     };
   }

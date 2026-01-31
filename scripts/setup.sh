@@ -907,17 +907,24 @@ print_completion() {
     fi
     
     echo ""
+    echo -e "${C_CYAN}Service URLs:${C_RESET}"
+    echo "  MeshCentral:      ${protocol}://${domain}"
+    echo "  Admin Dashboard:  ${protocol}://${domain}/admin-settings"
+    echo "  Support Portal:   ${protocol}://${domain}/support"
+    
+    echo ""
     echo -e "${C_CYAN}Next Steps:${C_RESET}"
     echo "  1. Open ${protocol}://${domain} in your browser"
     echo "  2. Create your admin account"
-    echo "  3. Configure device groups"
-    echo "  4. Download and deploy agents"
+    echo "  3. Configure settings at ${protocol}://${domain}/admin-settings"
+    echo "  4. Customize branding, notifications, etc."
+    echo "  5. Download and deploy agents"
     
     echo ""
     echo -e "${C_CYAN}Useful Commands:${C_RESET}"
-    echo "  View logs:       docker compose logs -f"
-    echo "  Stop services:   docker compose down"
-    echo "  Restart:         docker compose restart"
+    echo "  View logs:       sudo docker compose logs -f"
+    echo "  Stop services:   sudo docker compose down"
+    echo "  Restart:         sudo docker compose restart"
     echo "  Update:          ./scripts/update.sh"
     echo "  Backup:          ./scripts/backup.sh"
     

@@ -17,9 +17,20 @@ const API = (function() {
   
   // Base URL - automatically detect from current location
   const getBaseUrl = () => {
-    // If running on same server, use relative path
-    // If running separately, configure via environment
-    return window.API_BASE_URL || '/api';
+    // Check if custom URL is set
+    if (window.API_BASE_URL) {
+      return window.API_BASE_URL;
+    }
+    
+    // Auto-detect based on current path
+    // If accessed via /admin-settings, use /admin-settings/api
+    // If accessed directly, use /api
+    const path = window.location.pathname;
+    if (path.startsWith('/admin-settings')) {
+      return '/admin-settings/api';
+    }
+    
+    return '/api';
   };
   
   // Default request options

@@ -862,23 +862,38 @@ start_services() {
     fi
     
     # Also check for common container names that might conflict
-    for container_name in "${project_name}-meshcentral" "${project_name}-nginx" "${project_name}-certbot" "${project_name}-uptime-kuma" "${project_name}-dozzle" "${project_name}-fail2ban" "meshcentral-stack-meshcentral-1" "meshcentral-stack-nginx-1"; do
-        if sudo docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^${container_name}"; then
-            print_info "Removing container: $container_name"
+    for container_name in "${project_name}-meshcentral" "${project_name}-nginx" "${project_name}-admin" "${project_name}-notifications" "${project_name}-certbot" "${project_name}-uptime-kuma" "${project_name}-dozzle" "${project_name}-fail2ban" "meshcentral-stack-meshcentral-1" "meshcentral-stack-nginx-1" "meshcentral-stack-admin-1" "meshcentral-stack-notifications-1" "remote-support-admin" "remote-support-notifications"; do
+        if sudo docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^${container_name}$"; then
+            print_info "Removing conflicting container: $container_name"
             sudo docker rm -f "$container_name" 2>/dev/null || true
         fi
     done
     
-    # Clean up orphaned networks
+    # Clean up orphaned networks (including from different project names)
+    print_info "Cleaning up old networks..."
+    for network_name in "remote-support_internal" "remote-support_external" "meshcentral-stack_internal" "meshcentral-stack_external" "${project_name}_internal" "${project_name}_external"; do
+        if sudo docker network ls --format '{{.Name}}' 2>/dev/null | grep -q "^${network_name}$"; then
+            print_info "Removing old network: $network_name"
+            sudo docker network rm "$network_name" 2>/dev/null || true
+        fi
+    done
     sudo docker network prune -f 2>/dev/null || true
+    
+    # Clean up orphaned volumes that might cause issues
+    print_info "Checking for orphaned volumes..."
+    sudo docker volume prune -f 2>/dev/null || true
     
     # Pull images
     print_info "Pulling Docker images..."
-    compose pull
+    compose pull 2>/dev/null || true
     
-    # Start services
+    # Build custom images
+    print_info "Building custom images..."
+    compose build --no-cache 2>/dev/null || true
+    
+    # Start services with force recreate to avoid conflicts
     print_info "Starting containers..."
-    compose up -d
+    compose up -d --force-recreate --remove-orphans
     
     # Wait for services
     print_info "Waiting for services to be ready..."

@@ -38,12 +38,12 @@ has_docker() {
 
 # Check if Docker daemon is running
 is_docker_running() {
-    docker info &>/dev/null
+    docker info &>/dev/null || sudo docker info &>/dev/null
 }
 
 # Check if Docker Compose is available (v2 or v1)
 has_compose() {
-    docker compose version &>/dev/null || docker-compose --version &>/dev/null
+    docker compose version &>/dev/null || sudo docker compose version &>/dev/null || docker-compose --version &>/dev/null
 }
 
 # Get Docker Compose command (v2 preferred)

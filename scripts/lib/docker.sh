@@ -50,11 +50,11 @@ has_compose() {
 get_compose_cmd() {
     if docker compose version &>/dev/null; then
         echo "docker compose"
-    elif sudo -n docker compose version &>/dev/null 2>&1; then
+    elif sudo docker compose version &>/dev/null 2>&1; then
         echo "sudo docker compose"
     elif docker-compose --version &>/dev/null; then
         echo "docker-compose"
-    elif sudo -n docker-compose --version &>/dev/null 2>&1; then
+    elif sudo docker-compose --version &>/dev/null 2>&1; then
         echo "sudo docker-compose"
     else
         log_error "Docker Compose not found"
@@ -73,7 +73,7 @@ get_docker_version() {
 get_compose_version() {
     if docker compose version &>/dev/null; then
         docker compose version --short 2>/dev/null || echo "unknown"
-    elif sudo -n docker compose version &>/dev/null 2>&1; then
+    elif sudo docker compose version &>/dev/null 2>&1; then
         sudo docker compose version --short 2>/dev/null || echo "unknown"
     elif docker-compose --version &>/dev/null; then
         docker-compose --version | grep -oP '\d+\.\d+\.\d+' | head -1 || echo "unknown"

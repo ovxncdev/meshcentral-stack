@@ -25,6 +25,11 @@ services:
     container_name: ${PROJECT_NAME:-remote-support}-meshcentral
     restart: unless-stopped
     
+    # DNS fallback for code signing timestamps
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    
     environment:
       - NODE_ENV=${ENVIRONMENT:-production}
       - HOSTNAME=${SERVER_DOMAIN:-localhost}

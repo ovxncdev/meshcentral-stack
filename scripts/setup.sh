@@ -809,17 +809,31 @@ start_services() {
         return 1
     fi
     
-    # Cleanup any existing containers that might conflict
+    # Force cleanup any existing containers that might conflict
     print_info "Cleaning up old containers..."
+    local project_name="${PROJECT_NAME:-remote-support}"
+    
+    # Stop compose project first
     compose down --remove-orphans 2>/dev/null || true
     
-    # Remove any conflicting containers by name
-    local project_name="${PROJECT_NAME:-remote-support}"
-    local containers=$(docker ps -aq --filter "name=${project_name}" 2>/dev/null || sudo docker ps -aq --filter "name=${project_name}" 2>/dev/null)
-    if [[ -n "$containers" ]]; then
-        print_info "Removing old project containers..."
-        docker rm -f $containers 2>/dev/null || sudo docker rm -f $containers 2>/dev/null || true
+    # Force remove ALL containers with project name (handles edge cases)
+    local all_project_containers
+    all_project_containers=$(sudo docker ps -aq --filter "name=${project_name}" 2>/dev/null)
+    if [[ -n "$all_project_containers" ]]; then
+        print_info "Force removing all project containers..."
+        echo "$all_project_containers" | xargs -r sudo docker rm -f 2>/dev/null || true
     fi
+    
+    # Also check for common container names that might conflict
+    for container_name in "${project_name}-meshcentral" "${project_name}-nginx" "${project_name}-certbot" "${project_name}-uptime-kuma" "${project_name}-dozzle" "${project_name}-fail2ban" "meshcentral-stack-meshcentral-1" "meshcentral-stack-nginx-1"; do
+        if sudo docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^${container_name}"; then
+            print_info "Removing container: $container_name"
+            sudo docker rm -f "$container_name" 2>/dev/null || true
+        fi
+    done
+    
+    # Clean up orphaned networks
+    sudo docker network prune -f 2>/dev/null || true
     
     # Pull images
     print_info "Pulling Docker images..."
@@ -831,7 +845,7 @@ start_services() {
     
     # Wait for services
     print_info "Waiting for services to be ready..."
-    sleep 10
+    sleep 15
     
     # Check health
     local healthy=true

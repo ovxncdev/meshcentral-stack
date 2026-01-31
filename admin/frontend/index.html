@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Dashboard - Remote Support</title>
+    
+    <!-- Favicon -->
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚙️</text></svg>">
+    
+    <!-- Styles -->
+    <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+    <div id="app">
+        <!-- Sidebar -->
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <div class="logo">
+                    <span class="logo-icon">⚙️</span>
+                    <span class="logo-text">Admin</span>
+                </div>
+            </div>
+            
+            <nav class="sidebar-nav" id="moduleNav">
+                <!-- Module navigation items will be inserted here -->
+                <div class="nav-loading">Loading modules...</div>
+            </nav>
+            
+            <div class="sidebar-footer">
+                <a href="/" class="nav-item" target="_blank">
+                    <span class="nav-icon">🌐</span>
+                    <span class="nav-label">MeshCentral</span>
+                </a>
+                <a href="/support" class="nav-item" target="_blank">
+                    <span class="nav-icon">🎧</span>
+                    <span class="nav-label">Support Portal</span>
+                </a>
+            </div>
+        </aside>
+        
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Header -->
+            <header class="header">
+                <button class="menu-toggle" id="menuToggle" aria-label="Toggle menu">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                </button>
+                
+                <h1 class="header-title" id="pageTitle">Dashboard</h1>
+                
+                <div class="header-actions">
+                    <button class="btn btn-icon" id="refreshBtn" title="Refresh">
+                        🔄
+                    </button>
+                    <button class="btn btn-icon" id="exportBtn" title="Export Settings">
+                        📥
+                    </button>
+                </div>
+            </header>
+            
+            <!-- Content Area -->
+            <div class="content" id="content">
+                <!-- Dashboard Home -->
+                <div class="dashboard-home" id="dashboardHome">
+                    <div class="welcome-card">
+                        <h2>Welcome to Remote Support Admin</h2>
+                        <p>Configure your remote support system using the modules on the left.</p>
+                    </div>
+                    
+                    <div class="quick-stats" id="quickStats">
+                        <!-- Stats will be loaded here -->
+                    </div>
+                    
+                    <div class="module-grid" id="moduleGrid">
+                        <!-- Module cards will be loaded here -->
+                    </div>
+                </div>
+                
+                <!-- Module Settings Panel (hidden by default) -->
+                <div class="module-panel" id="modulePanel" style="display: none;">
+                    <div class="panel-header">
+                        <h2 class="panel-title" id="modulePanelTitle">Module Settings</h2>
+                        <p class="panel-description" id="modulePanelDescription"></p>
+                    </div>
+                    
+                    <form class="settings-form" id="settingsForm">
+                        <!-- Form fields will be generated dynamically -->
+                    </form>
+                    
+                    <div class="panel-actions" id="panelActions">
+                        <!-- Action buttons will be generated dynamically -->
+                    </div>
+                    
+                    <div class="panel-footer">
+                        <button type="button" class="btn btn-secondary" id="cancelBtn">Cancel</button>
+                        <button type="submit" class="btn btn-primary" id="saveBtn" form="settingsForm">
+                            💾 Save Settings
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </main>
+        
+        <!-- Toast Notifications -->
+        <div class="toast-container" id="toastContainer"></div>
+        
+        <!-- Confirm Dialog -->
+        <div class="modal-overlay" id="confirmModal" style="display: none;">
+            <div class="modal">
+                <div class="modal-header">
+                    <h3 id="confirmTitle">Confirm</h3>
+                </div>
+                <div class="modal-body">
+                    <p id="confirmMessage">Are you sure?</p>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" id="confirmCancel">Cancel</button>
+                    <button class="btn btn-primary" id="confirmOk">OK</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Scripts -->
+    <script src="js/api.js"></script>
+    <script src="js/ui.js"></script>
+    <script src="js/app.js"></script>
+</body>
+</html>

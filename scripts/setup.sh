@@ -612,6 +612,14 @@ generate_self_signed_cert() {
     chmod 600 "$key_file"
     chmod 644 "$cert_file"
     
+    # Copy certificate to MeshCentral data directory so agent cert hash matches
+    local meshcentral_data="$(get_path data)/meshcentral"
+    ensure_dir "$meshcentral_data"
+    cp "$cert_file" "$meshcentral_data/webserver-cert-public.crt"
+    cp "$key_file" "$meshcentral_data/webserver-cert-private.key"
+    chmod 644 "$meshcentral_data/webserver-cert-public.crt"
+    chmod 600 "$meshcentral_data/webserver-cert-private.key"
+    
     # Update nginx config to use self-signed cert
     local site_config="$(get_path config)/nginx/sites/meshcentral.conf"
     sed -i "s|/etc/letsencrypt/live/${domain}/fullchain.pem|/etc/nginx/ssl/cert.pem|g" "$site_config"

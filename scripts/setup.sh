@@ -543,7 +543,7 @@ configure_meshcentral() {
     local session_key="${MESHCENTRAL_SESSION_KEY:-$(generate_key 64)}"
     
     # Use sed for JSON modification (jq would be better but may not be installed)
-    sed -i "s|CHANGE_THIS_DOMAIN.COM|${domain}|g" "$config_file"
+    sed -i "s|YOUR_DOMAIN_OR_IP|${domain}|g" "$config_file"
     sed -i "s|CHANGE_THIS_RANDOM_SESSION_KEY_32_CHARS_MIN|${session_key}|g" "$config_file"
     
     print_success "MeshCentral configured"

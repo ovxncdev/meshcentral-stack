@@ -568,6 +568,20 @@ configure_nginx() {
 # SSL Certificates
 # ==============================================================================
 
+# Check if a string is an IP address
+is_ip_address() {
+    local input="$1"
+    # IPv4 pattern
+    if [[ "$input" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        return 0
+    fi
+    # IPv6 pattern (simplified)
+    if [[ "$input" =~ ^[0-9a-fA-F:]+$ ]] && [[ "$input" == *:* ]]; then
+        return 0
+    fi
+    return 1
+}
+
 setup_ssl() {
     print_step "Setting Up SSL Certificates"
     
@@ -576,6 +590,20 @@ setup_ssl() {
     local ssl_path="$(get_path data)/ssl"
     
     ensure_dir "$ssl_path" 0700
+    
+    # Force self-signed if domain is an IP address (Let's Encrypt doesn't support IPs)
+    if is_ip_address "$domain"; then
+        if [[ "$ssl_type" == "letsencrypt" ]]; then
+            print_warning "Let's Encrypt does not support IP addresses"
+            print_info "Automatically using self-signed certificate for IP: $domain"
+        fi
+        ssl_type="self-signed"
+    fi
+    
+    # Force self-signed for localhost
+    if [[ "$domain" == "localhost" ]]; then
+        ssl_type="self-signed"
+    fi
     
     if [[ "$ssl_type" == "self-signed" ]] || [[ "$DEV_MODE" == "true" ]]; then
         generate_self_signed_cert "$domain" "$ssl_path"

@@ -1,0 +1,8 @@
+# Admin Dashboard Data Directory
+
+This directory stores admin dashboard settings.
+
+Files:
+- settings.json - All module settings (auto-generated)
+
+Do not edit these files manually - use the admin dashboard at /admin-settings

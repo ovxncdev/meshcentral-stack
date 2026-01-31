@@ -809,6 +809,18 @@ start_services() {
         return 1
     fi
     
+    # Cleanup any existing containers that might conflict
+    print_info "Cleaning up old containers..."
+    compose down --remove-orphans 2>/dev/null || true
+    
+    # Remove any conflicting containers by name
+    local project_name="${PROJECT_NAME:-remote-support}"
+    local containers=$(docker ps -aq --filter "name=${project_name}" 2>/dev/null || sudo docker ps -aq --filter "name=${project_name}" 2>/dev/null)
+    if [[ -n "$containers" ]]; then
+        print_info "Removing old project containers..."
+        docker rm -f $containers 2>/dev/null || sudo docker rm -f $containers 2>/dev/null || true
+    fi
+    
     # Pull images
     print_info "Pulling Docker images..."
     compose pull
@@ -840,7 +852,7 @@ start_services() {
         print_success "All services started"
     else
         print_warning "Some services may not be ready yet"
-        print_info "Check logs with: docker compose logs -f"
+        print_info "Check logs with: sudo docker compose logs -f"
     fi
 }
 

@@ -52,9 +52,9 @@ services:
       # Custom config (optional - mounted read-only)
       - ${CONFIG_PATH:-./config}/meshcentral/config.json:/opt/meshcentral/meshcentral-data/config.json:ro
       
-      # SSL certificate (must match nginx cert for agent connections)
-      - ${DATA_PATH:-./data}/ssl/cert.pem:/opt/meshcentral/meshcentral-data/webserver-cert-public.crt:ro
-      - ${DATA_PATH:-./data}/ssl/key.pem:/opt/meshcentral/meshcentral-data/webserver-cert-private.key:ro
+      # SSL certificate - shared with nginx so agent cert hash matches
+      - ${SSL_CERT_PATH:-./data/ssl}/cert.pem:/opt/meshcentral/meshcentral-data/webserver-cert-public.crt:ro
+      - ${SSL_CERT_PATH:-./data/ssl}/key.pem:/opt/meshcentral/meshcentral-data/webserver-cert-private.key:ro
     
     networks:
       - internal
@@ -111,6 +111,10 @@ services:
       
       # Web root (for ACME challenges and custom portal)
       - ${WEB_PATH:-./web}:/var/www/html:ro
+      
+      # Support portal and downloads
+      - ${WEB_PATH:-./web}/support:/var/www/support:ro
+      - ${WEB_PATH:-./web}/downloads:/var/www/downloads:ro
       
       # Logs
       - nginx_logs:/var/log/nginx

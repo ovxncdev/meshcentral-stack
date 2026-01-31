@@ -602,23 +602,24 @@ generate_self_signed_cert() {
         return 0
     fi
     
+    # Generate cert with IP in SAN for direct IP access
     openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
         -keyout "$key_file" \
         -out "$cert_file" \
         -subj "/CN=${domain}/O=Remote Support/C=US" \
-        -addext "subjectAltName=DNS:${domain},DNS:localhost,IP:127.0.0.1" \
+        -addext "subjectAltName=DNS:${domain},DNS:localhost,IP:127.0.0.1,IP:${domain}" \
+        2>/dev/null || \
+    openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+        -keyout "$key_file" \
+        -out "$cert_file" \
+        -subj "/CN=${domain}/O=Remote Support/C=US" \
         2>/dev/null
     
     chmod 600 "$key_file"
     chmod 644 "$cert_file"
     
-    # Copy certificate to MeshCentral data directory so agent cert hash matches
-    local meshcentral_data="$(get_path data)/meshcentral"
-    ensure_dir "$meshcentral_data"
-    cp "$cert_file" "$meshcentral_data/webserver-cert-public.crt"
-    cp "$key_file" "$meshcentral_data/webserver-cert-private.key"
-    chmod 644 "$meshcentral_data/webserver-cert-public.crt"
-    chmod 600 "$meshcentral_data/webserver-cert-private.key"
+    # NOTE: docker-compose.yml mounts this cert to both nginx and meshcentral
+    # This ensures agent certificate hash matches between nginx and meshcentral
     
     # Update nginx config to use self-signed cert
     local site_config="$(get_path config)/nginx/sites/meshcentral.conf"

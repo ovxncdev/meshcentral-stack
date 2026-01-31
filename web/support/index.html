@@ -1,0 +1,603 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title id="pageTitle">Get Remote Support</title>
+    
+    <!-- Dynamic favicon -->
+    <link rel="icon" id="favicon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎧</text></svg>">
+    
+    <style>
+        /* ==============================================================================
+           CSS Variables (defaults - overridden by branding)
+           ============================================================================== */
+        :root {
+            --brand-primary: #3182ce;
+            --brand-secondary: #2c5282;
+            --brand-accent: #38a169;
+            --brand-background: #1a365d;
+            --brand-text: #ffffff;
+            --logo-width: 200px;
+        }
+        
+        /* ==============================================================================
+           Base Styles
+           ============================================================================== */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: linear-gradient(135deg, var(--brand-background) 0%, var(--brand-secondary) 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        
+        /* ==============================================================================
+           Container
+           ============================================================================== */
+        .container {
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            max-width: 500px;
+            width: 100%;
+            padding: 40px;
+            text-align: center;
+        }
+        
+        /* ==============================================================================
+           Loading State
+           ============================================================================== */
+        .loading {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 16px;
+            padding: 40px;
+        }
+        
+        .spinner {
+            width: 40px;
+            height: 40px;
+            border: 3px solid #e2e8f0;
+            border-top-color: var(--brand-primary);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        .loading-text {
+            color: #718096;
+            font-size: 14px;
+        }
+        
+        /* ==============================================================================
+           Maintenance Mode
+           ============================================================================== */
+        .maintenance {
+            text-align: center;
+            padding: 40px;
+        }
+        
+        .maintenance-icon {
+            font-size: 64px;
+            margin-bottom: 24px;
+        }
+        
+        .maintenance h2 {
+            color: #e53e3e;
+            margin-bottom: 16px;
+        }
+        
+        .maintenance p {
+            color: #718096;
+        }
+        
+        /* ==============================================================================
+           Logo
+           ============================================================================== */
+        .logo {
+            margin-bottom: 24px;
+        }
+        
+        .logo img {
+            max-width: var(--logo-width);
+            height: auto;
+        }
+        
+        .logo-placeholder {
+            width: 80px;
+            height: 80px;
+            background: linear-gradient(135deg, var(--brand-primary) 0%, var(--brand-secondary) 100%);
+            border-radius: 20px;
+            margin: 0 auto;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .logo-placeholder svg {
+            width: 48px;
+            height: 48px;
+            fill: white;
+        }
+        
+        /* ==============================================================================
+           Content
+           ============================================================================== */
+        h1 {
+            color: var(--brand-secondary);
+            font-size: 28px;
+            margin-bottom: 12px;
+        }
+        
+        .subtitle {
+            color: #718096;
+            font-size: 16px;
+            margin-bottom: 32px;
+            line-height: 1.5;
+        }
+        
+        /* ==============================================================================
+           Download Button
+           ============================================================================== */
+        .download-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            background: linear-gradient(135deg, var(--brand-accent) 0%, #2f855a 100%);
+            color: white;
+            font-size: 18px;
+            font-weight: 600;
+            padding: 16px 40px;
+            border-radius: 12px;
+            text-decoration: none;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(56, 161, 105, 0.4);
+            border: none;
+            cursor: pointer;
+        }
+        
+        .download-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(56, 161, 105, 0.5);
+        }
+        
+        .download-btn svg {
+            width: 24px;
+            height: 24px;
+            fill: currentColor;
+        }
+        
+        /* ==============================================================================
+           Security Badge
+           ============================================================================== */
+        .secure-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            color: #718096;
+            font-size: 13px;
+            margin-top: 16px;
+        }
+        
+        .secure-badge svg {
+            width: 16px;
+            height: 16px;
+            fill: var(--brand-accent);
+        }
+        
+        /* ==============================================================================
+           Steps
+           ============================================================================== */
+        .steps {
+            margin-top: 40px;
+            text-align: left;
+            background: #f7fafc;
+            border-radius: 12px;
+            padding: 24px;
+        }
+        
+        .steps h3 {
+            color: #2d3748;
+            font-size: 16px;
+            margin-bottom: 16px;
+        }
+        
+        .step {
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+            margin-bottom: 12px;
+        }
+        
+        .step:last-child {
+            margin-bottom: 0;
+        }
+        
+        .step-number {
+            background: var(--brand-primary);
+            color: white;
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            font-weight: 600;
+            flex-shrink: 0;
+        }
+        
+        .step-text {
+            color: #4a5568;
+            font-size: 14px;
+            line-height: 1.5;
+            padding-top: 2px;
+        }
+        
+        /* ==============================================================================
+           Contact Info
+           ============================================================================== */
+        .contact {
+            margin-top: 32px;
+            padding-top: 24px;
+            border-top: 1px solid #e2e8f0;
+        }
+        
+        .contact-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: #2d3748;
+            margin-bottom: 12px;
+        }
+        
+        .contact-item {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            color: #718096;
+            font-size: 14px;
+            margin-bottom: 8px;
+        }
+        
+        .contact-item a {
+            color: var(--brand-primary);
+            text-decoration: none;
+        }
+        
+        .contact-item a:hover {
+            text-decoration: underline;
+        }
+        
+        /* ==============================================================================
+           Footer
+           ============================================================================== */
+        .footer {
+            margin-top: 24px;
+            color: #a0aec0;
+            font-size: 12px;
+        }
+        
+        .powered-by {
+            margin-top: 8px;
+            font-size: 11px;
+            color: #cbd5e0;
+        }
+        
+        .powered-by a {
+            color: #a0aec0;
+            text-decoration: none;
+        }
+        
+        /* ==============================================================================
+           Hidden
+           ============================================================================== */
+        .hidden {
+            display: none !important;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Loading State -->
+        <div class="loading" id="loadingState">
+            <div class="spinner"></div>
+            <span class="loading-text">Loading...</span>
+        </div>
+        
+        <!-- Maintenance Mode -->
+        <div class="maintenance hidden" id="maintenanceState">
+            <div class="maintenance-icon">🔧</div>
+            <h2>Under Maintenance</h2>
+            <p id="maintenanceMessage">System is under maintenance. Please try again later.</p>
+        </div>
+        
+        <!-- Main Content -->
+        <div class="hidden" id="mainContent">
+            <!-- Logo -->
+            <div class="logo" id="logoContainer">
+                <div class="logo-placeholder">
+                    <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
+                    </svg>
+                </div>
+            </div>
+            
+            <!-- Title -->
+            <h1 id="supportTitle">Get Remote Support</h1>
+            <p class="subtitle" id="supportDescription">
+                Our technician is ready to help you. Download the support package below to get started.
+            </p>
+            
+            <!-- Download Button -->
+            <a href="/downloads/support-package.zip" class="download-btn" id="downloadBtn">
+                <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/>
+                </svg>
+                <span id="downloadBtnText">Download Support Package</span>
+            </a>
+            
+            <!-- Security Badge -->
+            <div class="secure-badge">
+                <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 10.99h7c-.53 4.12-3.28 7.79-7 8.94V12H5V6.3l7-3.11v8.8z"/>
+                </svg>
+                Secure & Encrypted Connection
+            </div>
+            
+            <!-- Steps -->
+            <div class="steps">
+                <h3>How to connect:</h3>
+                <div class="step">
+                    <span class="step-number">1</span>
+                    <span class="step-text">Click the download button above to get the support package</span>
+                </div>
+                <div class="step">
+                    <span class="step-number">2</span>
+                    <span class="step-text">Extract the ZIP file to your desktop</span>
+                </div>
+                <div class="step">
+                    <span class="step-number">3</span>
+                    <span class="step-text">Double-click <strong>Run_Support.bat</strong> to connect</span>
+                </div>
+                <div class="step">
+                    <span class="step-number">4</span>
+                    <span class="step-text">Wait for our technician to connect to your session</span>
+                </div>
+            </div>
+            
+            <!-- Contact Info -->
+            <div class="contact hidden" id="contactSection">
+                <div class="contact-title">Need help?</div>
+                <div class="contact-item hidden" id="contactEmail">
+                    📧 <a href="" id="contactEmailLink"></a>
+                </div>
+                <div class="contact-item hidden" id="contactPhone">
+                    📞 <span id="contactPhoneText"></span>
+                </div>
+                <div class="contact-item hidden" id="contactHours">
+                    🕐 <span id="contactHoursText"></span>
+                </div>
+            </div>
+            
+            <!-- Footer -->
+            <p class="footer" id="footerText"></p>
+            <p class="powered-by hidden" id="poweredBy">
+                Powered by <a href="https://github.com/meshcentral/meshcentral" target="_blank">MeshCentral</a>
+            </p>
+        </div>
+    </div>
+    
+    <!-- Custom CSS injection point -->
+    <style id="customCss"></style>
+    
+    <script>
+        /**
+         * Support Page Dynamic Branding
+         * Loads branding settings from admin API and applies them.
+         */
+        
+        // Configuration - auto-detect API base
+        const API_BASE = '/admin-settings/api';
+        
+        // Elements
+        const elements = {
+            loadingState: document.getElementById('loadingState'),
+            maintenanceState: document.getElementById('maintenanceState'),
+            mainContent: document.getElementById('mainContent'),
+            pageTitle: document.getElementById('pageTitle'),
+            favicon: document.getElementById('favicon'),
+            logoContainer: document.getElementById('logoContainer'),
+            supportTitle: document.getElementById('supportTitle'),
+            supportDescription: document.getElementById('supportDescription'),
+            downloadBtn: document.getElementById('downloadBtn'),
+            downloadBtnText: document.getElementById('downloadBtnText'),
+            contactSection: document.getElementById('contactSection'),
+            contactEmail: document.getElementById('contactEmail'),
+            contactEmailLink: document.getElementById('contactEmailLink'),
+            contactPhone: document.getElementById('contactPhone'),
+            contactPhoneText: document.getElementById('contactPhoneText'),
+            contactHours: document.getElementById('contactHours'),
+            contactHoursText: document.getElementById('contactHoursText'),
+            footerText: document.getElementById('footerText'),
+            poweredBy: document.getElementById('poweredBy'),
+            maintenanceMessage: document.getElementById('maintenanceMessage'),
+            customCss: document.getElementById('customCss')
+        };
+        
+        /**
+         * Show a specific state
+         */
+        function showState(state) {
+            elements.loadingState.classList.add('hidden');
+            elements.maintenanceState.classList.add('hidden');
+            elements.mainContent.classList.add('hidden');
+            
+            if (state === 'loading') elements.loadingState.classList.remove('hidden');
+            else if (state === 'maintenance') elements.maintenanceState.classList.remove('hidden');
+            else if (state === 'content') elements.mainContent.classList.remove('hidden');
+        }
+        
+        /**
+         * Apply CSS variables for theming
+         */
+        function applyCssVariables(branding) {
+            const root = document.documentElement;
+            
+            if (branding.primaryColor) root.style.setProperty('--brand-primary', branding.primaryColor);
+            if (branding.secondaryColor) root.style.setProperty('--brand-secondary', branding.secondaryColor);
+            if (branding.accentColor) root.style.setProperty('--brand-accent', branding.accentColor);
+            if (branding.backgroundColor) root.style.setProperty('--brand-background', branding.backgroundColor);
+            if (branding.textColor) root.style.setProperty('--brand-text', branding.textColor);
+            if (branding.logoWidth) root.style.setProperty('--logo-width', branding.logoWidth + 'px');
+        }
+        
+        /**
+         * Apply branding to page
+         */
+        function applyBranding(branding) {
+            // Page title
+            if (branding.companyName) {
+                elements.pageTitle.textContent = (branding.supportTitle || 'Get Support') + ' - ' + branding.companyName;
+            }
+            
+            // Favicon
+            if (branding.faviconUrl) {
+                elements.favicon.href = branding.faviconUrl;
+            }
+            
+            // Logo
+            if (branding.logoUrl) {
+                elements.logoContainer.innerHTML = '<img src="' + escapeHtml(branding.logoUrl) + '" alt="' + escapeHtml(branding.companyName || 'Logo') + '">';
+            }
+            
+            // Title and description
+            if (branding.supportTitle) {
+                elements.supportTitle.textContent = branding.supportTitle;
+            }
+            if (branding.supportDescription) {
+                elements.supportDescription.textContent = branding.supportDescription;
+            }
+            
+            // Download button
+            if (branding.supportButtonText) {
+                elements.downloadBtnText.textContent = branding.supportButtonText;
+            }
+            
+            // Contact info
+            var hasContact = false;
+            
+            if (branding.supportEmail) {
+                elements.contactEmailLink.href = 'mailto:' + branding.supportEmail;
+                elements.contactEmailLink.textContent = branding.supportEmail;
+                elements.contactEmail.classList.remove('hidden');
+                hasContact = true;
+            }
+            
+            if (branding.supportPhone) {
+                elements.contactPhoneText.textContent = branding.supportPhone;
+                elements.contactPhone.classList.remove('hidden');
+                hasContact = true;
+            }
+            
+            if (branding.supportHours) {
+                elements.contactHoursText.textContent = branding.supportHours;
+                elements.contactHours.classList.remove('hidden');
+                hasContact = true;
+            }
+            
+            if (hasContact) {
+                elements.contactSection.classList.remove('hidden');
+            }
+            
+            // Footer
+            if (branding.footerText) {
+                elements.footerText.textContent = branding.footerText;
+            }
+            
+            // Powered by
+            if (branding.showPoweredBy !== false) {
+                elements.poweredBy.classList.remove('hidden');
+            }
+            
+            // Custom CSS
+            if (branding.customCss) {
+                elements.customCss.textContent = branding.customCss;
+            }
+            
+            // Apply CSS variables
+            applyCssVariables(branding);
+        }
+        
+        /**
+         * Load branding from API
+         */
+        async function loadBranding() {
+            showState('loading');
+            
+            try {
+                // Load branding
+                var brandingResponse = await fetch(API_BASE + '/branding');
+                var brandingData = await brandingResponse.json();
+                
+                var branding = {};
+                if (brandingData.success && brandingData.branding) {
+                    branding = brandingData.branding;
+                }
+                
+                // Check maintenance mode (from general settings)
+                try {
+                    var generalResponse = await fetch(API_BASE + '/modules/general/settings');
+                    var generalData = await generalResponse.json();
+                    
+                    if (generalData.success && generalData.settings && generalData.settings.maintenanceMode) {
+                        elements.maintenanceMessage.textContent = 
+                            generalData.settings.maintenanceMessage || 'System is under maintenance.';
+                        showState('maintenance');
+                        return;
+                    }
+                } catch (e) {
+                    // General settings not available, continue
+                    console.log('General settings not available');
+                }
+                
+                // Apply branding
+                applyBranding(branding);
+                showState('content');
+                
+            } catch (error) {
+                console.error('Failed to load branding:', error);
+                // Show content with defaults on error
+                showState('content');
+            }
+        }
+        
+        /**
+         * Escape HTML to prevent XSS
+         */
+        function escapeHtml(text) {
+            if (!text) return '';
+            var div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+        
+        // Load branding on page load
+        document.addEventListener('DOMContentLoaded', loadBranding);
+    </script>
+</body>
+</html>

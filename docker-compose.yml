@@ -157,6 +157,9 @@ services:
     container_name: ${PROJECT_NAME:-remote-support}-admin
     restart: unless-stopped
     
+    # Run as root to avoid volume permission issues
+    user: "0:0"
+    
     environment:
       - NODE_ENV=${ENVIRONMENT:-production}
       - PORT=${ADMIN_PORT:-3001}

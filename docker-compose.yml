@@ -160,6 +160,11 @@ services:
     # Run as root to avoid volume permission issues
     user: "0:0"
     
+    # DNS for external API calls (Telegram, etc.)
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    
     environment:
       - NODE_ENV=${ENVIRONMENT:-production}
       - PORT=${ADMIN_PORT:-3001}
@@ -173,6 +178,7 @@ services:
     
     networks:
       - internal
+      - external
     
     expose:
       - "${ADMIN_PORT:-3001}"

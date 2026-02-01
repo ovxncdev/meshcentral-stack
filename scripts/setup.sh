@@ -386,7 +386,7 @@ check_required_ports() {
         local name="${port_info##*:}"
         
         local process_info
-        process_info=$(get_port_process "$port")
+        process_info=$(get_port_process "$port") || true
         
         if [[ -n "$process_info" ]]; then
             blocked_ports+=("$port")
@@ -436,8 +436,8 @@ check_required_ports() {
     case "$choice" in
         1)
             stop_blocking_services "${blocked_ports[@]}"
-            # Re-check ports
-            check_required_ports
+            # Re-check ports (use || true to prevent errexit)
+            check_required_ports || true
             ;;
         2)
             configure_alternate_ports "${blocked_ports[@]}"

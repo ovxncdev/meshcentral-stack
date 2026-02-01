@@ -24,6 +24,7 @@ set -o pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/lib/core.sh"
 source "${SCRIPT_DIR}/lib/docker.sh"
+source "${SCRIPT_DIR}/lib/proxy.sh"
 
 # ==============================================================================
 # Configuration
@@ -1231,9 +1232,12 @@ setup_letsencrypt() {
     # Check if port 80 is available
     if ! check_port_available 80; then
         print_warning "Port 80 is in use. Let's Encrypt requires port 80 for verification."
-        print_info "Falling back to self-signed certificate..."
-        generate_self_signed_cert "$domain" "$(get_path data)/ssl"
-        return 0
+        offer_port_resolution 80
+        if ! check_port_available 80; then
+            print_info "Falling back to self-signed certificate..."
+            generate_self_signed_cert "$domain" "$(get_path data)/ssl"
+            return 0
+        fi
     fi
     
     # Start nginx temporarily for ACME challenge
@@ -1252,6 +1256,7 @@ setup_letsencrypt() {
     
     if [[ $retries -eq 0 ]]; then
         print_warning "Nginx did not start properly for ACME challenge"
+        compose down nginx 2>/dev/null || true
         print_info "Falling back to self-signed certificate..."
         generate_self_signed_cert "$domain" "$(get_path data)/ssl"
         return 0
@@ -1269,6 +1274,11 @@ setup_letsencrypt() {
         --no-eff-email \
         --non-interactive \
         -d "$domain" 2>&1) || true
+    
+    # ALWAYS stop nginx after Let's Encrypt attempt - it will be started properly in step 8
+    print_info "Stopping temporary Nginx..."
+    compose down 2>/dev/null || true
+    sleep 2
     
     # Check if successful
     if echo "$certbot_output" | grep -q "Successfully received certificate\|Congratulations"; then
@@ -1337,6 +1347,30 @@ check_port_available() {
     else
         return 0
     fi
+}
+
+# Offer to resolve port conflict interactively
+offer_port_resolution() {
+    local port="$1"
+    
+    if [[ "$INTERACTIVE" != "true" ]]; then
+        return 1
+    fi
+    
+    local process_info
+    process_info=$(get_port_process "$port")
+    
+    echo ""
+    print_warning "Port $port is in use by: ${process_info:-unknown}"
+    echo ""
+    
+    if prompt_yes_no "Would you like to stop the service using port $port?" "y"; then
+        stop_blocking_services "$port"
+        sleep 2
+        return 0
+    fi
+    
+    return 1
 }
 
 setup_ssl_renewal() {
@@ -1482,6 +1516,65 @@ start_services() {
         return 1
     fi
     
+    # Check ports are available BEFORE starting anything
+    print_info "Verifying ports are available..."
+    local http_port="${NGINX_HTTP_PORT:-80}"
+    local https_port="${NGINX_HTTPS_PORT:-443}"
+    local ports_blocked=false
+    
+    for port in "$http_port" "$https_port"; do
+        if ! check_port_available "$port"; then
+            ports_blocked=true
+            local process_info
+            process_info=$(get_port_process "$port")
+            print_warning "Port $port is in use by: ${process_info:-unknown}"
+        fi
+    done
+    
+    if [[ "$ports_blocked" == "true" ]]; then
+        echo ""
+        if [[ "$INTERACTIVE" == "true" ]]; then
+            echo "  What would you like to do?"
+            echo "    1) Stop blocking services and retry"
+            echo "    2) Continue anyway (may fail)"
+            echo "    3) Exit"
+            echo ""
+            local choice
+            read -rp "  Select option [1-3]: " choice
+            
+            case "$choice" in
+                1)
+                    for port in "$http_port" "$https_port"; do
+                        if ! check_port_available "$port"; then
+                            stop_blocking_services "$port"
+                        fi
+                    done
+                    sleep 3
+                    # Re-check
+                    for port in "$http_port" "$https_port"; do
+                        if ! check_port_available "$port"; then
+                            print_error "Port $port is still in use"
+                            return 1
+                        fi
+                    done
+                    print_success "Ports are now available"
+                    ;;
+                2)
+                    print_warning "Continuing with port conflicts..."
+                    ;;
+                *)
+                    echo "Setup cancelled."
+                    exit 1
+                    ;;
+            esac
+        else
+            print_error "Ports are in use. Please free ports $http_port and $https_port first."
+            return 1
+        fi
+    else
+        print_success "All required ports are available"
+    fi
+    
     # Force cleanup any existing containers that might conflict
     print_info "Cleaning up old containers..."
     local project_name="${PROJECT_NAME:-remote-support}"
@@ -1527,17 +1620,43 @@ start_services() {
     print_info "Building custom images..."
     compose build --no-cache 2>/dev/null || true
     
+    # Final port check before starting
+    for port in "$http_port" "$https_port"; do
+        if ! check_port_available "$port"; then
+            print_error "Port $port became unavailable during setup"
+            local process_info
+            process_info=$(get_port_process "$port")
+            print_error "Currently used by: ${process_info:-unknown}"
+            return 1
+        fi
+    done
+    
     # Start services with force recreate to avoid conflicts
     print_info "Starting containers..."
-    compose up -d --force-recreate --remove-orphans
+    
+    # Use profile to control nginx
+    local compose_args="up -d --force-recreate --remove-orphans"
+    if [[ "${NGINX_PROFILE:-default}" == "disabled" ]] || [[ "$USE_BUNDLED_NGINX" == "false" ]]; then
+        print_info "Skipping bundled nginx (using external proxy)"
+        # Start without nginx by excluding it
+        compose up -d --force-recreate --remove-orphans meshcentral admin notifications
+    else
+        compose $compose_args
+    fi
     
     # Wait for services
     print_info "Waiting for services to be ready..."
     sleep 15
     
-    # Check health
+    # Check health - only check nginx if we're using bundled
     local healthy=true
-    for service in meshcentral nginx; do
+    local services_to_check=("meshcentral")
+    
+    if [[ "${NGINX_PROFILE:-default}" != "disabled" ]] && [[ "$USE_BUNDLED_NGINX" != "false" ]]; then
+        services_to_check+=("nginx")
+    fi
+    
+    for service in "${services_to_check[@]}"; do
         local container="${PROJECT_NAME:-remote-support}-${service}"
         local status
         status=$(container_status "$container")
@@ -1547,6 +1666,17 @@ start_services() {
         else
             print_warning "$service status: $status"
             healthy=false
+        fi
+    done
+    
+    # Also check admin and notifications
+    for service in admin notifications; do
+        local container="${PROJECT_NAME:-remote-support}-${service}"
+        local status
+        status=$(container_status "$container")
+        
+        if [[ "$status" == "running" ]]; then
+            print_success "$service is running"
         fi
     done
     
@@ -1644,12 +1774,96 @@ main() {
     check_prerequisites
     install_docker
     create_directories
+    detect_and_configure_proxy    # NEW: Detect existing proxy environment
     configure_environment
     configure_services
     setup_ssl
     configure_firewall
     start_services
     print_completion
+}
+
+# ==============================================================================
+# Proxy Detection and Configuration
+# ==============================================================================
+
+detect_and_configure_proxy() {
+    print_step "Detecting Proxy Environment"
+    
+    # Detect existing proxy
+    detect_proxy_environment
+    
+    # If external proxy found, configure integration
+    if [[ "$PROXY_TYPE" != "none" ]] && [[ "$PROXY_TYPE" != "bundled" ]]; then
+        echo ""
+        print_info "Detected existing proxy: $PROXY_TYPE"
+        
+        if [[ "$INTERACTIVE" == "true" ]]; then
+            echo ""
+            echo "  Options:"
+            echo "    1) Use existing proxy (recommended if you have SSL configured)"
+            echo "    2) Use bundled nginx (replaces existing proxy for this domain)"
+            echo ""
+            
+            local choice
+            read -rp "  Select option [1-2] (default: 1): " choice
+            choice="${choice:-1}"
+            
+            if [[ "$choice" == "2" ]]; then
+                print_info "Will use bundled nginx"
+                PROXY_TYPE="none"
+                USE_BUNDLED_NGINX=true
+                
+                # Need to stop the existing service
+                handle_port_conflict
+            else
+                print_info "Will integrate with existing proxy"
+                configure_proxy_integration
+                
+                # Set environment variable to skip bundled nginx
+                export NGINX_PROFILE="disabled"
+            fi
+        else
+            # Non-interactive: use existing proxy by default
+            print_info "Non-interactive mode: integrating with existing proxy"
+            configure_proxy_integration
+            export NGINX_PROFILE="disabled"
+        fi
+    else
+        print_info "No existing proxy detected - will use bundled nginx"
+        USE_BUNDLED_NGINX=true
+        export NGINX_PROFILE="default"
+    fi
+    
+    print_success "Proxy configuration complete"
+}
+
+# Handle port conflicts when user wants to use bundled nginx
+handle_port_conflict() {
+    local http_port="${NGINX_HTTP_PORT:-80}"
+    local https_port="${NGINX_HTTPS_PORT:-443}"
+    
+    for port in "$http_port" "$https_port"; do
+        if ! check_port_available "$port"; then
+            local process_info
+            process_info=$(get_port_process "$port")
+            
+            print_warning "Port $port is in use by: ${process_info:-unknown}"
+            
+            if [[ "$INTERACTIVE" == "true" ]]; then
+                if prompt_yes_no "Stop the service using port $port?" "y"; then
+                    stop_blocking_services "$port"
+                    sleep 2
+                else
+                    print_info "Using alternate port for $port"
+                    configure_alternate_ports "$port"
+                fi
+            else
+                print_error "Port $port is in use. Cannot proceed in non-interactive mode."
+                exit 1
+            fi
+        fi
+    done
 }
 
 # Run main

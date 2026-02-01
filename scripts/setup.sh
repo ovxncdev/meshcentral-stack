@@ -971,24 +971,24 @@ setup_ssl() {
     print_step "Setting Up SSL Certificates"
     
     local domain="${SERVER_DOMAIN:-localhost}"
-    local ssl_type="${SSL_TYPE:-auto}"
     local ssl_path="$(get_path data)/ssl"
     
-    ensure_dir "$ssl_path" 0700
+    sudo mkdir -p "$ssl_path"
+    sudo chmod 755 "$ssl_path"
     
     # ===========================================================================
-    # Step 1: Check for existing certificates in our directory
+    # Step 1: Check for existing valid certificates
     # ===========================================================================
     
     if [[ -f "${ssl_path}/cert.pem" ]] && [[ -f "${ssl_path}/key.pem" ]]; then
         if [[ "$FORCE_REINSTALL" != "true" ]]; then
             print_info "Found existing certificate in ${ssl_path}"
-            if verify_certificate "${ssl_path}/cert.pem" "$domain"; then
+            if verify_certificate "${ssl_path}/cert.pem" "$domain" 2>/dev/null; then
                 print_success "Existing certificate is valid for ${domain}"
                 configure_nginx_ssl "${ssl_path}/cert.pem" "${ssl_path}/key.pem" "$domain"
                 return 0
             else
-                print_warning "Existing certificate not valid for ${domain}, searching for valid certificate..."
+                print_warning "Existing certificate not valid for ${domain}"
             fi
         fi
     fi
@@ -1009,11 +1009,10 @@ setup_ssl() {
         print_info "  Certificate: $found_cert"
         print_info "  Key: $found_key"
         
-        # Copy to our ssl directory
-        cp "$found_cert" "${ssl_path}/cert.pem"
-        cp "$found_key" "${ssl_path}/key.pem"
-        chmod 644 "${ssl_path}/cert.pem"
-        chmod 600 "${ssl_path}/key.pem"
+        sudo cp "$found_cert" "${ssl_path}/cert.pem"
+        sudo cp "$found_key" "${ssl_path}/key.pem"
+        sudo chmod 644 "${ssl_path}/cert.pem"
+        sudo chmod 600 "${ssl_path}/key.pem"
         
         configure_nginx_ssl "${ssl_path}/cert.pem" "${ssl_path}/key.pem" "$domain"
         print_success "Using existing certificate"
@@ -1021,42 +1020,368 @@ setup_ssl() {
     fi
     
     # ===========================================================================
-    # Step 3: No existing cert found - determine how to get one
+    # Step 3: No existing cert found - ask user which type to use
     # ===========================================================================
     
     print_info "No existing valid certificate found for ${domain}"
     
-    # Force self-signed if domain is an IP address
-    if is_ip_address "$domain"; then
-        if [[ "$ssl_type" == "letsencrypt" ]]; then
-            print_warning "Let's Encrypt does not support IP addresses"
-            print_info "Automatically using self-signed certificate for IP: $domain"
-        fi
-        ssl_type="self-signed"
-    fi
-    
-    # Force self-signed for localhost
-    if [[ "$domain" == "localhost" ]]; then
-        ssl_type="self-signed"
-    fi
-    
-    # Auto-detect: try Let's Encrypt first if email provided
-    if [[ "$ssl_type" == "auto" ]]; then
-        if [[ -n "${SSL_EMAIL:-}" ]]; then
-            ssl_type="letsencrypt"
-        else
-            ssl_type="self-signed"
-        fi
-    fi
-    
-    if [[ "$ssl_type" == "self-signed" ]] || [[ "$DEV_MODE" == "true" ]]; then
+    # Check for special cases
+    if is_ip_address "$domain" || [[ "$domain" == "localhost" ]]; then
+        print_warning "Domain is IP address or localhost - only self-signed certificates are supported"
         generate_self_signed_cert "$domain" "$ssl_path"
-    elif [[ "$ssl_type" == "letsencrypt" ]]; then
-        setup_letsencrypt "$domain"
+        return 0
+    fi
+    
+    if [[ "$DEV_MODE" == "true" ]]; then
+        print_info "Development mode - using self-signed certificate"
+        generate_self_signed_cert "$domain" "$ssl_path"
+        return 0
+    fi
+    
+    # Interactive SSL selection
+    if [[ "$INTERACTIVE" == "true" ]]; then
+        select_ssl_certificate_type "$domain" "$ssl_path"
     else
-        print_warning "Unknown SSL type: $ssl_type"
-        print_info "Generating self-signed certificate..."
+        # Non-interactive: try Let's Encrypt if email provided, else self-signed
+        if [[ -n "${SSL_EMAIL:-}" ]]; then
+            setup_letsencrypt "$domain"
+        else
+            generate_self_signed_cert "$domain" "$ssl_path"
+        fi
+    fi
+}
+
+# ==============================================================================
+# SSL Certificate Type Selection Menu
+# ==============================================================================
+
+select_ssl_certificate_type() {
+    local domain="$1"
+    local ssl_path="$2"
+    
+    echo ""
+    echo "  ┌─────────────────────────────────────────────────────────────────┐"
+    echo "  │           SSL Certificate Options                               │"
+    echo "  ├─────────────────────────────────────────────────────────────────┤"
+    echo "  │                                                                 │"
+    echo "  │  1) Let's Encrypt (Recommended)                                 │"
+    echo "  │     • Free, trusted certificate                                 │"
+    echo "  │     • Auto-renews every 90 days                                 │"
+    echo "  │     • Requires port 80 accessible OR Cloudflare DNS             │"
+    echo "  │                                                                 │"
+    echo "  │  2) Let's Encrypt + Cloudflare DNS                              │"
+    echo "  │     • Works even if port 80 is blocked                          │"
+    echo "  │     • Supports wildcard certificates (*.domain.com)             │"
+    echo "  │     • Requires Cloudflare API token                             │"
+    echo "  │                                                                 │"
+    echo "  │  3) Cloudflare Origin Certificate                               │"
+    echo "  │     • 15-year validity                                          │"
+    echo "  │     • Only works with Cloudflare proxy enabled                  │"
+    echo "  │     • Requires manual certificate from Cloudflare dashboard     │"
+    echo "  │                                                                 │"
+    echo "  │  4) Self-Signed Certificate                                     │"
+    echo "  │     • Works immediately, no external dependencies               │"
+    echo "  │     • Browser will show security warning                        │"
+    echo "  │     • Good for testing or internal use                          │"
+    echo "  │                                                                 │"
+    echo "  └─────────────────────────────────────────────────────────────────┘"
+    echo ""
+    
+    local choice
+    read -rp "  Select certificate type [1-4] (default: 1): " choice
+    choice="${choice:-1}"
+    
+    case "$choice" in
+        1)
+            setup_letsencrypt_http "$domain" "$ssl_path"
+            ;;
+        2)
+            setup_letsencrypt_cloudflare "$domain" "$ssl_path"
+            ;;
+        3)
+            setup_cloudflare_origin "$domain" "$ssl_path"
+            ;;
+        4)
+            generate_self_signed_cert "$domain" "$ssl_path"
+            ;;
+        *)
+            print_warning "Invalid choice, using self-signed certificate"
+            generate_self_signed_cert "$domain" "$ssl_path"
+            ;;
+    esac
+}
+
+# ==============================================================================
+# Let's Encrypt HTTP Challenge (Standard)
+# ==============================================================================
+
+setup_letsencrypt_http() {
+    local domain="$1"
+    local ssl_path="$2"
+    
+    print_info "Setting up Let's Encrypt with HTTP challenge..."
+    
+    # Get email if not set
+    local email="${SSL_EMAIL:-}"
+    if [[ -z "$email" ]]; then
+        read -rp "  Enter email for Let's Encrypt notifications: " email
+        if [[ -z "$email" ]]; then
+            print_warning "Email required for Let's Encrypt"
+            print_info "Falling back to self-signed certificate..."
+            generate_self_signed_cert "$domain" "$ssl_path"
+            return 0
+        fi
+        export SSL_EMAIL="$email"
+    fi
+    
+    # Call existing Let's Encrypt setup
+    setup_letsencrypt "$domain"
+}
+
+# ==============================================================================
+# Let's Encrypt with Cloudflare DNS Challenge
+# ==============================================================================
+
+setup_letsencrypt_cloudflare() {
+    local domain="$1"
+    local ssl_path="$2"
+    
+    print_info "Setting up Let's Encrypt with Cloudflare DNS challenge..."
+    echo ""
+    echo "  This method uses Cloudflare DNS API for certificate verification."
+    echo "  It works even if port 80 is blocked and supports wildcard certs."
+    echo ""
+    echo "  To create a Cloudflare API token:"
+    echo "    1. Go to: https://dash.cloudflare.com/profile/api-tokens"
+    echo "    2. Click 'Create Token'"
+    echo "    3. Use 'Edit zone DNS' template"
+    echo "    4. Select your zone (${domain})"
+    echo "    5. Create and copy the token"
+    echo ""
+    
+    local cf_token
+    read -rp "  Enter Cloudflare API token: " cf_token
+    
+    if [[ -z "$cf_token" ]]; then
+        print_warning "Cloudflare API token required"
+        print_info "Falling back to self-signed certificate..."
         generate_self_signed_cert "$domain" "$ssl_path"
+        return 0
+    fi
+    
+    # Get email
+    local email="${SSL_EMAIL:-}"
+    if [[ -z "$email" ]]; then
+        read -rp "  Enter email for Let's Encrypt: " email
+        if [[ -z "$email" ]]; then
+            email="admin@${domain}"
+        fi
+    fi
+    
+    # Ask about wildcard
+    local cert_domains="-d ${domain}"
+    if prompt_yes_no "  Include wildcard certificate (*.${domain})?" "y"; then
+        cert_domains="-d *.${domain} -d ${domain}"
+    fi
+    
+    # Create credentials file
+    print_info "Configuring Cloudflare credentials..."
+    sudo mkdir -p /etc/letsencrypt
+    echo "dns_cloudflare_api_token = ${cf_token}" | sudo tee /etc/letsencrypt/cloudflare.ini > /dev/null
+    sudo chmod 600 /etc/letsencrypt/cloudflare.ini
+    
+    # Run certbot with Cloudflare DNS
+    print_info "Requesting certificate from Let's Encrypt..."
+    
+    local certbot_output
+    certbot_output=$(sudo docker run --rm \
+        -v "${ssl_path}:/etc/letsencrypt/live/${domain}" \
+        -v /etc/letsencrypt/cloudflare.ini:/etc/letsencrypt/cloudflare.ini:ro \
+        certbot/dns-cloudflare certonly \
+        --dns-cloudflare \
+        --dns-cloudflare-credentials /etc/letsencrypt/cloudflare.ini \
+        --dns-cloudflare-propagation-seconds 30 \
+        ${cert_domains} \
+        --email "${email}" \
+        --agree-tos \
+        --non-interactive \
+        --cert-name "${domain}" \
+        2>&1) || true
+    
+    echo "$certbot_output"
+    
+    # Check for success and find cert files
+    if echo "$certbot_output" | grep -qi "successfully\|congratulations"; then
+        print_success "Certificate obtained from Let's Encrypt!"
+        
+        # Find and copy certificates
+        local cert_file=$(sudo find "${ssl_path}" -name "fullchain*.pem" -o -name "cert*.pem" 2>/dev/null | head -1)
+        local key_file=$(sudo find "${ssl_path}" -name "privkey*.pem" -o -name "key*.pem" 2>/dev/null | head -1)
+        
+        if [[ -n "$cert_file" ]] && [[ -n "$key_file" ]]; then
+            sudo cp "$cert_file" "${ssl_path}/cert.pem"
+            sudo cp "$key_file" "${ssl_path}/key.pem"
+            sudo chmod 644 "${ssl_path}/cert.pem"
+            sudo chmod 600 "${ssl_path}/key.pem"
+            
+            configure_nginx_ssl "${ssl_path}/cert.pem" "${ssl_path}/key.pem" "$domain"
+            
+            # Save Cloudflare token for renewal
+            echo "CF_API_TOKEN=${cf_token}" | sudo tee -a "$(get_path base)/.env" > /dev/null
+            
+            setup_ssl_renewal_cloudflare "$domain" "$email"
+            return 0
+        fi
+    fi
+    
+    # Failed
+    print_warning "Failed to obtain Let's Encrypt certificate"
+    if echo "$certbot_output" | grep -qi "invalid\|unauthorized"; then
+        print_error "Cloudflare API token may be invalid or missing permissions"
+    fi
+    
+    print_info "Falling back to self-signed certificate..."
+    generate_self_signed_cert "$domain" "$ssl_path"
+}
+
+# ==============================================================================
+# Cloudflare Origin Certificate
+# ==============================================================================
+
+setup_cloudflare_origin() {
+    local domain="$1"
+    local ssl_path="$2"
+    
+    print_info "Setting up Cloudflare Origin Certificate..."
+    echo ""
+    echo "  ┌─────────────────────────────────────────────────────────────────┐"
+    echo "  │  How to get a Cloudflare Origin Certificate:                    │"
+    echo "  ├─────────────────────────────────────────────────────────────────┤"
+    echo "  │                                                                 │"
+    echo "  │  1. Go to Cloudflare Dashboard → Your Domain                    │"
+    echo "  │  2. Navigate to: SSL/TLS → Origin Server                        │"
+    echo "  │  3. Click 'Create Certificate'                                  │"
+    echo "  │  4. Select:                                                     │"
+    echo "  │     • Generate private key with Cloudflare                      │"
+    echo "  │     • Hostnames: *.${domain}, ${domain}"
+    echo "  │     • Validity: 15 years                                        │"
+    echo "  │  5. Click 'Create'                                              │"
+    echo "  │  6. Copy both the Certificate and Private Key                   │"
+    echo "  │                                                                 │"
+    echo "  │  IMPORTANT: Set Cloudflare SSL mode to 'Full (strict)'          │"
+    echo "  │                                                                 │"
+    echo "  └─────────────────────────────────────────────────────────────────┘"
+    echo ""
+    
+    if ! prompt_yes_no "  Do you have the Cloudflare Origin Certificate ready?" "n"; then
+        print_info "Please create the certificate in Cloudflare and run setup again"
+        print_info "Falling back to self-signed certificate for now..."
+        generate_self_signed_cert "$domain" "$ssl_path"
+        return 0
+    fi
+    
+    # Get certificate
+    echo ""
+    echo "  Paste the CERTIFICATE (starts with -----BEGIN CERTIFICATE-----):"
+    echo "  (Press Ctrl+D when done)"
+    echo ""
+    
+    local cert_content
+    cert_content=$(cat)
+    
+    if [[ -z "$cert_content" ]] || [[ ! "$cert_content" =~ "BEGIN CERTIFICATE" ]]; then
+        print_error "Invalid certificate format"
+        print_info "Falling back to self-signed certificate..."
+        generate_self_signed_cert "$domain" "$ssl_path"
+        return 0
+    fi
+    
+    # Get private key
+    echo ""
+    echo "  Paste the PRIVATE KEY (starts with -----BEGIN PRIVATE KEY-----):"
+    echo "  (Press Ctrl+D when done)"
+    echo ""
+    
+    local key_content
+    key_content=$(cat)
+    
+    if [[ -z "$key_content" ]] || [[ ! "$key_content" =~ "BEGIN" ]]; then
+        print_error "Invalid private key format"
+        print_info "Falling back to self-signed certificate..."
+        generate_self_signed_cert "$domain" "$ssl_path"
+        return 0
+    fi
+    
+    # Save certificate and key
+    echo "$cert_content" | sudo tee "${ssl_path}/cert.pem" > /dev/null
+    echo "$key_content" | sudo tee "${ssl_path}/key.pem" > /dev/null
+    sudo chmod 644 "${ssl_path}/cert.pem"
+    sudo chmod 600 "${ssl_path}/key.pem"
+    
+    # Verify the certificate
+    if sudo openssl x509 -noout -in "${ssl_path}/cert.pem" 2>/dev/null; then
+        print_success "Cloudflare Origin Certificate installed!"
+        configure_nginx_ssl "${ssl_path}/cert.pem" "${ssl_path}/key.pem" "$domain"
+        
+        echo ""
+        print_warning "IMPORTANT: Make sure Cloudflare SSL mode is set to 'Full (strict)'"
+        print_info "  Cloudflare Dashboard → SSL/TLS → Overview → Full (strict)"
+        echo ""
+    else
+        print_error "Certificate verification failed"
+        print_info "Falling back to self-signed certificate..."
+        generate_self_signed_cert "$domain" "$ssl_path"
+    fi
+}
+
+# ==============================================================================
+# SSL Renewal Setup for Cloudflare DNS
+# ==============================================================================
+
+setup_ssl_renewal_cloudflare() {
+    local domain="$1"
+    local email="$2"
+    
+    print_info "Setting up automatic certificate renewal..."
+    
+    # Create renewal script
+    local renewal_script="$(get_path base)/scripts/renew-cert.sh"
+    
+    cat > "$renewal_script" << 'RENEWAL_EOF'
+#!/bin/bash
+# SSL Certificate Renewal Script (Cloudflare DNS)
+# Auto-generated by setup script
+
+DOMAIN="__DOMAIN__"
+SSL_PATH="__SSL_PATH__"
+EMAIL="__EMAIL__"
+
+# Run certbot renewal
+docker run --rm \
+    -v "${SSL_PATH}:/etc/letsencrypt/live/${DOMAIN}" \
+    -v /etc/letsencrypt/cloudflare.ini:/etc/letsencrypt/cloudflare.ini:ro \
+    certbot/dns-cloudflare renew \
+    --dns-cloudflare \
+    --dns-cloudflare-credentials /etc/letsencrypt/cloudflare.ini
+
+# Restart nginx to pick up new cert
+cd "$(dirname "$0")/.."
+docker compose restart nginx
+RENEWAL_EOF
+    
+    # Replace placeholders
+    sed -i "s|__DOMAIN__|${domain}|g" "$renewal_script"
+    sed -i "s|__SSL_PATH__|$(get_path data)/ssl|g" "$renewal_script"
+    sed -i "s|__EMAIL__|${email}|g" "$renewal_script"
+    
+    chmod +x "$renewal_script"
+    
+    # Add cron job for renewal (runs weekly)
+    local cron_entry="0 3 * * 0 ${renewal_script} >> /var/log/ssl-renewal.log 2>&1"
+    
+    if ! crontab -l 2>/dev/null | grep -q "renew-cert.sh"; then
+        (crontab -l 2>/dev/null; echo "$cron_entry") | crontab -
+        print_success "Automatic renewal scheduled (weekly)"
     fi
 }
 

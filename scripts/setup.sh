@@ -586,12 +586,62 @@ setup_ssl() {
     print_step "Setting Up SSL Certificates"
     
     local domain="${SERVER_DOMAIN:-localhost}"
-    local ssl_type="${SSL_TYPE:-self-signed}"
+    local ssl_type="${SSL_TYPE:-auto}"
     local ssl_path="$(get_path data)/ssl"
     
     ensure_dir "$ssl_path" 0700
     
-    # Force self-signed if domain is an IP address (Let's Encrypt doesn't support IPs)
+    # ===========================================================================
+    # Step 1: Check for existing certificates in our directory
+    # ===========================================================================
+    
+    if [[ -f "${ssl_path}/cert.pem" ]] && [[ -f "${ssl_path}/key.pem" ]]; then
+        if [[ "$FORCE_REINSTALL" != "true" ]]; then
+            print_info "Found existing certificate in ${ssl_path}"
+            if verify_certificate "${ssl_path}/cert.pem" "$domain"; then
+                print_success "Existing certificate is valid for ${domain}"
+                configure_nginx_ssl "${ssl_path}/cert.pem" "${ssl_path}/key.pem" "$domain"
+                return 0
+            else
+                print_warning "Existing certificate not valid for ${domain}, searching for valid certificate..."
+            fi
+        fi
+    fi
+    
+    # ===========================================================================
+    # Step 2: Scan system for valid certificates
+    # ===========================================================================
+    
+    print_info "Scanning system for existing SSL certificates..."
+    
+    local found_cert=""
+    local found_key=""
+    
+    scan_for_certificates "$domain" found_cert found_key
+    
+    if [[ -n "$found_cert" ]] && [[ -n "$found_key" ]]; then
+        print_success "Found valid certificate!"
+        print_info "  Certificate: $found_cert"
+        print_info "  Key: $found_key"
+        
+        # Copy to our ssl directory
+        cp "$found_cert" "${ssl_path}/cert.pem"
+        cp "$found_key" "${ssl_path}/key.pem"
+        chmod 644 "${ssl_path}/cert.pem"
+        chmod 600 "${ssl_path}/key.pem"
+        
+        configure_nginx_ssl "${ssl_path}/cert.pem" "${ssl_path}/key.pem" "$domain"
+        print_success "Using existing certificate"
+        return 0
+    fi
+    
+    # ===========================================================================
+    # Step 3: No existing cert found - determine how to get one
+    # ===========================================================================
+    
+    print_info "No existing valid certificate found for ${domain}"
+    
+    # Force self-signed if domain is an IP address
     if is_ip_address "$domain"; then
         if [[ "$ssl_type" == "letsencrypt" ]]; then
             print_warning "Let's Encrypt does not support IP addresses"
@@ -605,6 +655,15 @@ setup_ssl() {
         ssl_type="self-signed"
     fi
     
+    # Auto-detect: try Let's Encrypt first if email provided
+    if [[ "$ssl_type" == "auto" ]]; then
+        if [[ -n "${SSL_EMAIL:-}" ]]; then
+            ssl_type="letsencrypt"
+        else
+            ssl_type="self-signed"
+        fi
+    fi
+    
     if [[ "$ssl_type" == "self-signed" ]] || [[ "$DEV_MODE" == "true" ]]; then
         generate_self_signed_cert "$domain" "$ssl_path"
     elif [[ "$ssl_type" == "letsencrypt" ]]; then
@@ -614,6 +673,255 @@ setup_ssl() {
         print_info "Generating self-signed certificate..."
         generate_self_signed_cert "$domain" "$ssl_path"
     fi
+}
+
+# ==============================================================================
+# Certificate Scanner - Searches entire system for valid certificates
+# ==============================================================================
+
+scan_for_certificates() {
+    local domain="$1"
+    local -n _found_cert=$2
+    local -n _found_key=$3
+    
+    _found_cert=""
+    _found_key=""
+    
+    # Common certificate directories to scan
+    local search_paths=(
+        "/etc/letsencrypt/live"
+        "/etc/ssl/certs"
+        "/etc/ssl/private"
+        "/etc/nginx/ssl"
+        "/etc/nginx/certs"
+        "/etc/apache2/ssl"
+        "/etc/pki/tls/certs"
+        "/etc/pki/tls/private"
+        "/opt/ssl"
+        "/opt/certs"
+        "/var/lib/letsencrypt"
+        "/root/.acme.sh"
+        "$HOME/.acme.sh"
+        "/etc/caddy/certs"
+        "$HOME/.local/share/caddy/certificates"
+        "/data/ssl"
+        "/data/certs"
+    )
+    
+    # Add Docker volume paths
+    local docker_volumes=$(docker volume ls --format '{{.Name}}' 2>/dev/null | grep -iE "cert|ssl|letsencrypt|acme|tls" || true)
+    for vol in $docker_volumes; do
+        local vol_path=$(docker volume inspect "$vol" --format '{{.Mountpoint}}' 2>/dev/null || true)
+        if [[ -n "$vol_path" ]]; then
+            search_paths+=("$vol_path")
+        fi
+    done
+    
+    print_info "Searching ${#search_paths[@]} locations for certificates..."
+    
+    local found_certs=()
+    local cert_info=""
+    
+    # Search each path
+    for search_path in "${search_paths[@]}"; do
+        [[ ! -d "$search_path" ]] && continue
+        
+        # Find all certificate files
+        while IFS= read -r -d '' cert_file; do
+            # Skip if not readable
+            [[ ! -r "$cert_file" ]] && continue
+            
+            # Verify it's actually a certificate
+            if ! openssl x509 -noout -in "$cert_file" 2>/dev/null; then
+                continue
+            fi
+            
+            # Check if valid for our domain
+            if verify_certificate "$cert_file" "$domain"; then
+                # Find corresponding private key
+                local key_file=""
+                key_file=$(find_matching_key "$cert_file" "$search_path")
+                
+                if [[ -n "$key_file" ]]; then
+                    # Get certificate details for display
+                    local expiry=$(openssl x509 -noout -enddate -in "$cert_file" 2>/dev/null | cut -d= -f2)
+                    local issuer=$(openssl x509 -noout -issuer -in "$cert_file" 2>/dev/null | sed 's/.*CN = //' | cut -d',' -f1)
+                    
+                    found_certs+=("$cert_file|$key_file|$expiry|$issuer")
+                fi
+            fi
+        done < <(find "$search_path" -type f \( -name "*.pem" -o -name "*.crt" -o -name "*.cer" -o -name "fullchain*" -o -name "cert*" \) -print0 2>/dev/null)
+    done
+    
+    # If we found certificates, let user choose or auto-select best one
+    if [[ ${#found_certs[@]} -gt 0 ]]; then
+        print_success "Found ${#found_certs[@]} valid certificate(s) for ${domain}:"
+        echo ""
+        
+        local best_cert=""
+        local best_key=""
+        local best_expiry=0
+        local idx=1
+        
+        for cert_entry in "${found_certs[@]}"; do
+            IFS='|' read -r cert_file key_file expiry issuer <<< "$cert_entry"
+            
+            # Calculate days until expiry
+            local expiry_epoch=$(date -d "$expiry" +%s 2>/dev/null || echo 0)
+            local now_epoch=$(date +%s)
+            local days_left=$(( (expiry_epoch - now_epoch) / 86400 ))
+            
+            echo "  [$idx] $cert_file"
+            echo "      Key: $key_file"
+            echo "      Issuer: $issuer"
+            echo "      Expires: $expiry ($days_left days)"
+            echo ""
+            
+            # Track the certificate with the longest validity
+            if [[ $expiry_epoch -gt $best_expiry ]]; then
+                best_expiry=$expiry_epoch
+                best_cert="$cert_file"
+                best_key="$key_file"
+            fi
+            
+            ((idx++))
+        done
+        
+        # In non-interactive mode, use the best certificate
+        if [[ "$INTERACTIVE" != "true" ]] || [[ ${#found_certs[@]} -eq 1 ]]; then
+            _found_cert="$best_cert"
+            _found_key="$best_key"
+            print_info "Auto-selecting certificate with longest validity"
+        else
+            # Interactive mode - let user choose
+            echo ""
+            local choice
+            read -p "  Select certificate [1-$((idx-1))] or press Enter for best: " choice
+            
+            if [[ -z "$choice" ]]; then
+                _found_cert="$best_cert"
+                _found_key="$best_key"
+            elif [[ "$choice" =~ ^[0-9]+$ ]] && [[ $choice -ge 1 ]] && [[ $choice -lt $idx ]]; then
+                IFS='|' read -r _found_cert _found_key _ _ <<< "${found_certs[$((choice-1))]}"
+            else
+                _found_cert="$best_cert"
+                _found_key="$best_key"
+            fi
+        fi
+        
+        return 0
+    fi
+    
+    # No certificates found - show help
+    print_info "No valid certificates found for ${domain}"
+    return 1
+}
+
+# Find the matching private key for a certificate
+find_matching_key() {
+    local cert_file="$1"
+    local search_path="$2"
+    
+    # Get the certificate's public key modulus
+    local cert_modulus=$(openssl x509 -noout -modulus -in "$cert_file" 2>/dev/null | md5sum | cut -d' ' -f1)
+    [[ -z "$cert_modulus" ]] && return 1
+    
+    # Common key file patterns
+    local key_patterns=(
+        "privkey*.pem"
+        "*.key"
+        "*key*.pem"
+        "private*.pem"
+    )
+    
+    # First, check same directory as cert
+    local cert_dir=$(dirname "$cert_file")
+    
+    for pattern in "${key_patterns[@]}"; do
+        for key_file in "$cert_dir"/$pattern; do
+            [[ ! -f "$key_file" ]] && continue
+            [[ ! -r "$key_file" ]] && continue
+            
+            local key_modulus=$(openssl rsa -noout -modulus -in "$key_file" 2>/dev/null | md5sum | cut -d' ' -f1)
+            if [[ "$cert_modulus" == "$key_modulus" ]]; then
+                echo "$key_file"
+                return 0
+            fi
+        done
+    done
+    
+    # Search broader path
+    while IFS= read -r -d '' key_file; do
+        [[ ! -r "$key_file" ]] && continue
+        
+        local key_modulus=$(openssl rsa -noout -modulus -in "$key_file" 2>/dev/null | md5sum | cut -d' ' -f1)
+        if [[ "$cert_modulus" == "$key_modulus" ]]; then
+            echo "$key_file"
+            return 0
+        fi
+    done < <(find "$search_path" -type f \( -name "*.key" -o -name "privkey*" -o -name "*private*" \) -print0 2>/dev/null)
+    
+    return 1
+}
+
+# Verify certificate is valid for domain
+verify_certificate() {
+    local cert_file="$1"
+    local domain="$2"
+    
+    if [[ ! -f "$cert_file" ]]; then
+        return 1
+    fi
+    
+    # Check if certificate is not expired (must be valid for at least 1 day)
+    if ! openssl x509 -checkend 86400 -noout -in "$cert_file" 2>/dev/null; then
+        return 1
+    fi
+    
+    # Extract domains from certificate
+    local cert_cn=$(openssl x509 -noout -subject -in "$cert_file" 2>/dev/null | grep -oP 'CN\s*=\s*\K[^,/]+' || true)
+    local cert_sans=$(openssl x509 -noout -text -in "$cert_file" 2>/dev/null | grep -A1 "Subject Alternative Name" | tail -1 | tr ',' '\n' | grep -oE "DNS:[^ ]+" | sed 's/DNS://' || true)
+    
+    local all_domains="$cert_cn $cert_sans"
+    
+    # Check exact match
+    if echo "$all_domains" | grep -qwF "$domain"; then
+        return 0
+    fi
+    
+    # Check wildcard match (*.example.com matches sub.example.com)
+    local parent_domain="${domain#*.}"
+    if echo "$all_domains" | grep -qE "\*\.${parent_domain}( |$)"; then
+        return 0
+    fi
+    
+    # Check if domain is subdomain and wildcard covers it
+    # e.g., domain=app.example.com, cert has *.example.com
+    local base_domain=$(echo "$domain" | rev | cut -d. -f1-2 | rev)
+    if echo "$all_domains" | grep -qE "\*\.${base_domain}( |$)"; then
+        return 0
+    fi
+    
+    return 1
+}
+
+# Configure nginx to use the SSL certificate
+configure_nginx_ssl() {
+    local cert_file="$1"
+    local key_file="$2"
+    local domain="$3"
+    
+    local site_config="$(get_path config)/nginx/sites/meshcentral.conf"
+    
+    # Update nginx config to use our cert
+    sed -i "s|ssl_certificate .*|ssl_certificate /etc/nginx/ssl/cert.pem;|g" "$site_config" 2>/dev/null || true
+    sed -i "s|ssl_certificate_key .*|ssl_certificate_key /etc/nginx/ssl/key.pem;|g" "$site_config" 2>/dev/null || true
+    
+    # Also update any Let's Encrypt paths
+    sed -i "s|/etc/letsencrypt/live/${domain}/fullchain.pem|/etc/nginx/ssl/cert.pem|g" "$site_config" 2>/dev/null || true
+    sed -i "s|/etc/letsencrypt/live/${domain}/privkey.pem|/etc/nginx/ssl/key.pem|g" "$site_config" 2>/dev/null || true
+    sed -i "s|/etc/letsencrypt/live/[^/]*/fullchain.pem|/etc/nginx/ssl/cert.pem|g" "$site_config" 2>/dev/null || true
+    sed -i "s|/etc/letsencrypt/live/[^/]*/privkey.pem|/etc/nginx/ssl/key.pem|g" "$site_config" 2>/dev/null || true
 }
 
 generate_self_signed_cert() {
@@ -627,15 +935,16 @@ generate_self_signed_cert() {
     
     if [[ -f "$cert_file" ]] && [[ -f "$key_file" ]] && [[ "$FORCE_REINSTALL" != "true" ]]; then
         print_info "SSL certificate already exists"
+        configure_nginx_ssl "$cert_file" "$key_file" "$domain"
         return 0
     fi
     
-    # Generate cert with IP in SAN for direct IP access
+    # Generate cert with SAN for compatibility
     openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
         -keyout "$key_file" \
         -out "$cert_file" \
         -subj "/CN=${domain}/O=Remote Support/C=US" \
-        -addext "subjectAltName=DNS:${domain},DNS:localhost,IP:127.0.0.1,IP:${domain}" \
+        -addext "subjectAltName=DNS:${domain},DNS:localhost,IP:127.0.0.1" \
         2>/dev/null || \
     openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
         -keyout "$key_file" \
@@ -646,13 +955,7 @@ generate_self_signed_cert() {
     chmod 600 "$key_file"
     chmod 644 "$cert_file"
     
-    # NOTE: docker-compose.yml mounts this cert to both nginx and meshcentral
-    # This ensures agent certificate hash matches between nginx and meshcentral
-    
-    # Update nginx config to use self-signed cert
-    local site_config="$(get_path config)/nginx/sites/meshcentral.conf"
-    sed -i "s|/etc/letsencrypt/live/${domain}/fullchain.pem|/etc/nginx/ssl/cert.pem|g" "$site_config"
-    sed -i "s|/etc/letsencrypt/live/${domain}/privkey.pem|/etc/nginx/ssl/key.pem|g" "$site_config"
+    configure_nginx_ssl "$cert_file" "$key_file" "$domain"
     
     print_success "Self-signed certificate generated"
     print_warning "Browser will show security warning (expected for self-signed)"
@@ -665,40 +968,131 @@ setup_letsencrypt() {
     print_info "Setting up Let's Encrypt for: $domain"
     
     if [[ -z "$email" ]]; then
-        log_error "SSL_EMAIL is required for Let's Encrypt"
-        return 1
+        print_error "SSL_EMAIL is required for Let's Encrypt"
+        echo ""
+        echo "  To use Let's Encrypt, set SSL_EMAIL in your .env file:"
+        echo "    SSL_EMAIL=your@email.com"
+        echo ""
+        echo "  Or run setup with:"
+        echo "    SSL_EMAIL=your@email.com ./scripts/setup.sh"
+        echo ""
+        print_info "Falling back to self-signed certificate..."
+        generate_self_signed_cert "$domain" "$(get_path data)/ssl"
+        return 0
     fi
     
-    # Ensure web root exists
+    # Ensure web root exists for ACME challenge
     local webroot="$(get_path web)/.well-known/acme-challenge"
     ensure_dir "$webroot"
+    
+    # Check if port 80 is available
+    if ! check_port_available 80; then
+        print_warning "Port 80 is in use. Let's Encrypt requires port 80 for verification."
+        print_info "Falling back to self-signed certificate..."
+        generate_self_signed_cert "$domain" "$(get_path data)/ssl"
+        return 0
+    fi
     
     # Start nginx temporarily for ACME challenge
     print_info "Starting Nginx for certificate challenge..."
     compose up -d nginx
     
-    sleep 5
+    # Wait for nginx to be ready
+    local retries=10
+    while [[ $retries -gt 0 ]]; do
+        if curl -s -o /dev/null -w "%{http_code}" "http://localhost/.well-known/acme-challenge/" 2>/dev/null | grep -q "403\|404\|200"; then
+            break
+        fi
+        sleep 2
+        ((retries--))
+    done
+    
+    if [[ $retries -eq 0 ]]; then
+        print_warning "Nginx did not start properly for ACME challenge"
+        print_info "Falling back to self-signed certificate..."
+        generate_self_signed_cert "$domain" "$(get_path data)/ssl"
+        return 0
+    fi
     
     # Request certificate
-    print_info "Requesting certificate..."
-    compose run --rm certbot certonly \
+    print_info "Requesting certificate from Let's Encrypt..."
+    
+    local certbot_output
+    certbot_output=$(compose run --rm certbot certonly \
         --webroot \
         --webroot-path=/var/www/html \
         --email "$email" \
         --agree-tos \
         --no-eff-email \
         --non-interactive \
-        -d "$domain"
+        -d "$domain" 2>&1) || true
     
-    if [[ $? -eq 0 ]]; then
-        print_success "SSL certificate obtained"
+    # Check if successful
+    if echo "$certbot_output" | grep -q "Successfully received certificate\|Congratulations"; then
+        print_success "SSL certificate obtained from Let's Encrypt!"
         
-        # Setup auto-renewal cron
+        # Copy to our ssl directory
+        local le_path="/etc/letsencrypt/live/${domain}"
+        if [[ -f "${le_path}/fullchain.pem" ]]; then
+            cp "${le_path}/fullchain.pem" "$(get_path data)/ssl/cert.pem"
+            cp "${le_path}/privkey.pem" "$(get_path data)/ssl/key.pem"
+        fi
+        
+        configure_nginx_ssl "$(get_path data)/ssl/cert.pem" "$(get_path data)/ssl/key.pem" "$domain"
         setup_ssl_renewal
+        return 0
+    fi
+    
+    # Certificate request failed
+    print_warning "Failed to obtain Let's Encrypt certificate"
+    echo ""
+    
+    if echo "$certbot_output" | grep -qi "unauthorized\|invalid response\|404"; then
+        print_error "Domain verification failed"
+        echo ""
+        echo "  Possible causes:"
+        echo "  • DNS not pointing to this server"
+        echo "  • Port 80 blocked by firewall"
+        echo "  • Another service handling port 80"
+        echo ""
+    elif echo "$certbot_output" | grep -qi "rate limit"; then
+        print_error "Let's Encrypt rate limit reached"
+        echo "  Wait an hour and try again."
+        echo ""
+    fi
+    
+    show_certificate_help "$domain"
+    
+    print_info "Falling back to self-signed certificate..."
+    generate_self_signed_cert "$domain" "$(get_path data)/ssl"
+}
+
+show_certificate_help() {
+    local domain="$1"
+    echo ""
+    echo "  ┌─────────────────────────────────────────────────────────────────┐"
+    echo "  │  How to Use an Existing Certificate                             │"
+    echo "  ├─────────────────────────────────────────────────────────────────┤"
+    echo "  │                                                                 │"
+    echo "  │  Copy your certificate files to:                                │"
+    echo "  │    $(get_path data)/ssl/cert.pem   (certificate + chain)        │"
+    echo "  │    $(get_path data)/ssl/key.pem    (private key)                │"
+    echo "  │                                                                 │"
+    echo "  │  Then restart:                                                  │"
+    echo "  │    sudo docker compose restart nginx                            │"
+    echo "  │                                                                 │"
+    echo "  └─────────────────────────────────────────────────────────────────┘"
+    echo ""
+}
+
+check_port_available() {
+    local port="$1"
+    if command -v ss &>/dev/null; then
+        ! ss -tuln | grep -q ":${port} "
+    elif command -v netstat &>/dev/null; then
+        ! netstat -tuln | grep -q ":${port} "
     else
-        print_warning "Failed to obtain Let's Encrypt certificate"
-        print_info "Falling back to self-signed certificate..."
-        generate_self_signed_cert "$domain" "$(get_path data)/ssl"
+        return 0
     fi
 }
 
@@ -707,7 +1101,6 @@ setup_ssl_renewal() {
     
     local cron_cmd="0 0 * * * cd $(get_path base) && docker compose run --rm certbot renew --quiet && docker compose exec nginx nginx -s reload"
     
-    # Add to crontab if not already present
     (crontab -l 2>/dev/null | grep -v "certbot renew"; echo "$cron_cmd") | crontab -
     
     print_success "Auto-renewal configured (daily check)"

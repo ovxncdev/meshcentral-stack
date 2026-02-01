@@ -264,6 +264,249 @@ check_prerequisites() {
     
     print_success "All prerequisites met"
     print_info "OS: $(get_distro) | Disk: ${available_space}GB | Memory: ${available_mem}MB"
+    
+    # Check required ports
+    check_required_ports
+}
+
+# ==============================================================================
+# Port Checking
+# ==============================================================================
+
+check_required_ports() {
+    print_info "Checking required ports..."
+    
+    # Default ports used by the stack
+    local http_port="${NGINX_HTTP_PORT:-80}"
+    local https_port="${NGINX_HTTPS_PORT:-443}"
+    
+    local ports_to_check=("$http_port:HTTP" "$https_port:HTTPS")
+    local blocked_ports=()
+    local port_processes=()
+    
+    for port_info in "${ports_to_check[@]}"; do
+        local port="${port_info%%:*}"
+        local name="${port_info##*:}"
+        
+        local process_info
+        process_info=$(get_port_process "$port")
+        
+        if [[ -n "$process_info" ]]; then
+            blocked_ports+=("$port")
+            port_processes+=("$port ($name): $process_info")
+        fi
+    done
+    
+    if [[ ${#blocked_ports[@]} -eq 0 ]]; then
+        print_success "All required ports are available"
+        return 0
+    fi
+    
+    # Ports are blocked - show info and options
+    echo ""
+    print_warning "The following ports are already in use:"
+    echo ""
+    for info in "${port_processes[@]}"; do
+        echo "  ⚠ $info"
+    done
+    echo ""
+    
+    # Offer solutions
+    echo "  ┌─────────────────────────────────────────────────────────────────┐"
+    echo "  │  Options:                                                       │"
+    echo "  │                                                                 │"
+    echo "  │  1. Stop the service using the port and retry                   │"
+    echo "  │  2. Use different ports for this installation                   │"
+    echo "  │  3. Continue anyway (may cause conflicts)                       │"
+    echo "  │                                                                 │"
+    echo "  └─────────────────────────────────────────────────────────────────┘"
+    echo ""
+    
+    if [[ "$INTERACTIVE" != "true" ]]; then
+        print_error "Ports are in use. Run interactively or free the ports first."
+        exit 1
+    fi
+    
+    local choice
+    echo "  What would you like to do?"
+    echo "    1) Stop blocking services and retry"
+    echo "    2) Use different ports"
+    echo "    3) Continue anyway"
+    echo "    4) Exit"
+    echo ""
+    read -rp "  Select option [1-4]: " choice
+    
+    case "$choice" in
+        1)
+            stop_blocking_services "${blocked_ports[@]}"
+            # Re-check ports
+            check_required_ports
+            ;;
+        2)
+            configure_alternate_ports "${blocked_ports[@]}"
+            ;;
+        3)
+            print_warning "Continuing with port conflicts - services may not start correctly"
+            ;;
+        4|*)
+            echo "Setup cancelled."
+            exit 0
+            ;;
+    esac
+}
+
+# Get process info using a port
+get_port_process() {
+    local port="$1"
+    local process_info=""
+    
+    if command -v ss &>/dev/null; then
+        process_info=$(ss -tlnp "sport = :$port" 2>/dev/null | grep -v "State" | awk '{print $6}' | grep -oP 'users:\("\K[^"]+' | head -1)
+    elif command -v netstat &>/dev/null; then
+        process_info=$(sudo netstat -tlnp 2>/dev/null | grep ":$port " | awk '{print $7}' | cut -d'/' -f2 | head -1)
+    elif command -v lsof &>/dev/null; then
+        process_info=$(sudo lsof -i ":$port" -sTCP:LISTEN 2>/dev/null | awk 'NR==2 {print $1}')
+    fi
+    
+    # If we found a process, try to get more details
+    if [[ -n "$process_info" ]]; then
+        # Check if it's a docker container
+        if [[ "$process_info" == "docker-proxy" ]] || [[ "$process_info" == "docker" ]]; then
+            local container_name
+            container_name=$(sudo docker ps --format '{{.Names}}' --filter "publish=$port" 2>/dev/null | head -1)
+            if [[ -n "$container_name" ]]; then
+                echo "Docker container: $container_name"
+                return 0
+            fi
+        fi
+        echo "$process_info"
+    fi
+}
+
+# Stop services blocking ports
+stop_blocking_services() {
+    local ports=("$@")
+    
+    print_info "Attempting to stop blocking services..."
+    
+    for port in "${ports[@]}"; do
+        local process_info
+        process_info=$(get_port_process "$port")
+        
+        if [[ -z "$process_info" ]]; then
+            continue
+        fi
+        
+        # Check if it's a Docker container
+        if [[ "$process_info" == Docker* ]]; then
+            local container_name="${process_info#Docker container: }"
+            print_info "Stopping Docker container: $container_name"
+            sudo docker stop "$container_name" 2>/dev/null || true
+            continue
+        fi
+        
+        # Check common services
+        case "$process_info" in
+            nginx)
+                print_info "Stopping nginx..."
+                sudo systemctl stop nginx 2>/dev/null || sudo service nginx stop 2>/dev/null || true
+                ;;
+            apache2|httpd)
+                print_info "Stopping Apache..."
+                sudo systemctl stop apache2 2>/dev/null || sudo systemctl stop httpd 2>/dev/null || sudo service apache2 stop 2>/dev/null || true
+                ;;
+            caddy)
+                print_info "Stopping Caddy..."
+                sudo systemctl stop caddy 2>/dev/null || sudo service caddy stop 2>/dev/null || true
+                ;;
+            *)
+                print_warning "Unknown service '$process_info' on port $port"
+                print_info "Please stop it manually: sudo kill \$(sudo lsof -t -i:$port)"
+                
+                if prompt_yes_no "Try to kill process on port $port?" "n"; then
+                    sudo kill $(sudo lsof -t -i:"$port") 2>/dev/null || true
+                    sleep 2
+                fi
+                ;;
+        esac
+    done
+    
+    # Give services time to stop
+    sleep 2
+    print_success "Attempted to stop blocking services"
+}
+
+# Configure alternate ports
+configure_alternate_ports() {
+    local blocked_ports=("$@")
+    
+    print_info "Configuring alternate ports..."
+    echo ""
+    
+    local env_file="$(get_path base)/.env"
+    
+    for port in "${blocked_ports[@]}"; do
+        local new_port
+        local var_name
+        
+        case "$port" in
+            80)
+                var_name="NGINX_HTTP_PORT"
+                local suggested=$((port + 8000))  # 8080
+                ;;
+            443)
+                var_name="NGINX_HTTPS_PORT"
+                local suggested=$((port + 8000))  # 8443
+                ;;
+            *)
+                var_name="PORT_$port"
+                local suggested=$((port + 1000))
+                ;;
+        esac
+        
+        # Find an available port starting from suggested
+        while get_port_process "$suggested" &>/dev/null && [[ -n "$(get_port_process "$suggested")" ]]; do
+            ((suggested++))
+        done
+        
+        read -rp "  Enter new port for $port (default: $suggested): " new_port
+        new_port="${new_port:-$suggested}"
+        
+        # Validate port
+        if ! [[ "$new_port" =~ ^[0-9]+$ ]] || [[ "$new_port" -lt 1 ]] || [[ "$new_port" -gt 65535 ]]; then
+            print_error "Invalid port: $new_port"
+            new_port="$suggested"
+        fi
+        
+        # Check if new port is available
+        if [[ -n "$(get_port_process "$new_port")" ]]; then
+            print_warning "Port $new_port is also in use, using $suggested"
+            new_port="$suggested"
+        fi
+        
+        print_info "Using port $new_port instead of $port"
+        
+        # Update or add to .env file
+        if [[ -f "$env_file" ]]; then
+            if grep -q "^${var_name}=" "$env_file"; then
+                sed -i "s/^${var_name}=.*/${var_name}=${new_port}/" "$env_file"
+            else
+                echo "${var_name}=${new_port}" >> "$env_file"
+            fi
+        fi
+        
+        # Export for current session
+        export "$var_name"="$new_port"
+    done
+    
+    echo ""
+    print_success "Alternate ports configured"
+    
+    if [[ " ${blocked_ports[*]} " =~ " 80 " ]] || [[ " ${blocked_ports[*]} " =~ " 443 " ]]; then
+        print_warning "Using non-standard ports. Access your site at:"
+        [[ -n "${NGINX_HTTP_PORT:-}" ]] && print_info "  HTTP:  http://${SERVER_DOMAIN:-localhost}:${NGINX_HTTP_PORT}"
+        [[ -n "${NGINX_HTTPS_PORT:-}" ]] && print_info "  HTTPS: https://${SERVER_DOMAIN:-localhost}:${NGINX_HTTPS_PORT}"
+    fi
 }
 
 # ==============================================================================

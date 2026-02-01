@@ -585,12 +585,17 @@ ssl_run_certbot_cloudflare() {
     print_info "Requesting certificate from Let's Encrypt..."
     
     if command_exists docker && [[ "${USE_DOCKER_CERTBOT:-true}" == "true" ]]; then
-        # Clean up any existing files that might conflict
-        run_with_sudo rm -rf "${ssl_path}/live" "${ssl_path}/archive" "${ssl_path}/renewal" 2>/dev/null || true
+        # Clean up any existing certbot directories that might conflict
+        run_with_sudo rm -rf "${ssl_path}/live" "${ssl_path}/archive" "${ssl_path}/renewal" "${ssl_path}/accounts" "${ssl_path}/renewal-hooks" 2>/dev/null || true
+        # Also remove any broken symlinks
+        run_with_sudo find "${ssl_path}" -maxdepth 1 -type l -delete 2>/dev/null || true
+        
+        # Copy cloudflare credentials into the ssl_path so it's available inside container
+        run_with_sudo cp /etc/letsencrypt/cloudflare.ini "${ssl_path}/cloudflare.ini" 2>/dev/null || true
+        run_with_sudo chmod 600 "${ssl_path}/cloudflare.ini"
         
         certbot_output=$(run_with_sudo docker run --rm \
             -v "${ssl_path}:/etc/letsencrypt" \
-            -v /etc/letsencrypt/cloudflare.ini:/etc/letsencrypt/cloudflare.ini:ro \
             "$CERTBOT_CLOUDFLARE_IMAGE" certonly \
             --dns-cloudflare \
             --dns-cloudflare-credentials /etc/letsencrypt/cloudflare.ini \
@@ -620,9 +625,13 @@ ssl_run_certbot_cloudflare() {
     # Check for success
     if echo "$certbot_output" | grep -qi "successfully\|congratulations"; then
         print_success "Certificate obtained from Let's Encrypt!"
-        ssl_extract_letsencrypt_cert "$domain" "$ssl_path"
-        ssl_configure_nginx "${ssl_path}/cert.pem" "${ssl_path}/key.pem" "$domain"
-        return 0
+        if ssl_extract_letsencrypt_cert "$domain" "$ssl_path"; then
+            ssl_configure_nginx "${ssl_path}/cert.pem" "${ssl_path}/key.pem" "$domain"
+            return 0
+        else
+            print_error "Failed to extract certificate files"
+            return 1
+        fi
     fi
     
     # Check for specific errors
@@ -641,43 +650,94 @@ ssl_extract_letsencrypt_cert() {
     local domain="$1"
     local ssl_path="$2"
     
-    # Find the certificate files (they may be in subdirectories)
-    local cert_file key_file
+    print_info "Extracting certificate files..."
     
-    # Check common locations
+    # Find the certificate files (they may be in subdirectories)
+    local cert_file=""
+    local key_file=""
+    
+    # Check common locations in order of preference
     local search_paths=(
         "${ssl_path}/live/${domain}"
-        "${ssl_path}/live"
         "${ssl_path}/archive/${domain}"
+        "${ssl_path}/live"
         "${ssl_path}"
     )
     
     for search_path in "${search_paths[@]}"; do
-        if [[ -f "${search_path}/fullchain.pem" ]] || [[ -L "${search_path}/fullchain.pem" ]]; then
+        [[ ! -d "$search_path" ]] && continue
+        
+        # Look for fullchain (symlink or file)
+        if [[ -e "${search_path}/fullchain.pem" ]]; then
             cert_file="${search_path}/fullchain.pem"
             key_file="${search_path}/privkey.pem"
             break
-        elif [[ -f "${search_path}/fullchain1.pem" ]]; then
+        fi
+        
+        # Look for numbered files (in archive)
+        if [[ -f "${search_path}/fullchain1.pem" ]]; then
             cert_file="${search_path}/fullchain1.pem"
             key_file="${search_path}/privkey1.pem"
             break
         fi
     done
     
+    # If still not found, do a broader search
+    if [[ -z "$cert_file" ]]; then
+        cert_file=$(run_with_sudo find "${ssl_path}" -name "fullchain*.pem" -type f 2>/dev/null | head -1)
+        if [[ -n "$cert_file" ]]; then
+            local cert_dir=$(dirname "$cert_file")
+            key_file=$(run_with_sudo find "$cert_dir" -name "privkey*.pem" -type f 2>/dev/null | head -1)
+        fi
+    fi
+    
     if [[ -z "$cert_file" ]] || [[ -z "$key_file" ]]; then
         print_error "Could not find Let's Encrypt certificate files"
+        print_info "Searching in: ${ssl_path}"
+        run_with_sudo find "${ssl_path}" -name "*.pem" -type f 2>/dev/null | head -10
         return 1
     fi
     
-    # Copy to standard location (following symlinks)
-    run_with_sudo cp -L "$cert_file" "${ssl_path}/cert.pem"
-    run_with_sudo cp -L "$key_file" "${ssl_path}/key.pem"
+    print_info "Found cert: $cert_file"
+    print_info "Found key: $key_file"
+    
+    # Remove any existing broken symlinks
+    run_with_sudo rm -f "${ssl_path}/cert.pem" "${ssl_path}/key.pem" 2>/dev/null || true
+    
+    # Copy to standard location (following symlinks with -L)
+    if ! run_with_sudo cp -L "$cert_file" "${ssl_path}/cert.pem" 2>/dev/null; then
+        # If -L fails (broken symlink), try to find the actual file
+        local real_cert=$(run_with_sudo readlink -f "$cert_file" 2>/dev/null || echo "$cert_file")
+        if [[ -f "$real_cert" ]]; then
+            run_with_sudo cp "$real_cert" "${ssl_path}/cert.pem"
+        else
+            print_error "Cannot copy certificate file: $cert_file"
+            return 1
+        fi
+    fi
+    
+    if ! run_with_sudo cp -L "$key_file" "${ssl_path}/key.pem" 2>/dev/null; then
+        local real_key=$(run_with_sudo readlink -f "$key_file" 2>/dev/null || echo "$key_file")
+        if [[ -f "$real_key" ]]; then
+            run_with_sudo cp "$real_key" "${ssl_path}/key.pem"
+        else
+            print_error "Cannot copy key file: $key_file"
+            return 1
+        fi
+    fi
     
     # Set permissions
     run_with_sudo chmod 644 "${ssl_path}/cert.pem"
     run_with_sudo chmod 600 "${ssl_path}/key.pem"
     
-    print_success "Certificate files extracted"
+    # Verify the files are valid
+    if ! run_with_sudo openssl x509 -noout -in "${ssl_path}/cert.pem" 2>/dev/null; then
+        print_error "Extracted certificate is invalid"
+        return 1
+    fi
+    
+    print_success "Certificate files extracted successfully"
+    return 0
 }
 
 # ==============================================================================
@@ -866,41 +926,61 @@ ssl_setup_renewal() {
     
     print_info "Setting up automatic certificate renewal..."
     
-    local renewal_script="$(get_path base)/scripts/renew-cert.sh"
+    local base_path
+    base_path=$(get_path base)
+    local ssl_path
+    ssl_path=$(get_path data)/ssl
+    local renewal_script="${base_path}/scripts/renew-cert.sh"
     
     # Create renewal script
-    cat > "$renewal_script" << RENEWAL_SCRIPT
+    cat > "$renewal_script" << EOF
 #!/bin/bash
 # SSL Certificate Renewal Script
 # Auto-generated - Method: ${method}
+# Domain: ${domain}
+
+set -e
 
 DOMAIN="${domain}"
 EMAIL="${email}"
-SSL_PATH="$(get_path data)/ssl"
-BASE_PATH="$(get_path base)"
+SSL_PATH="${ssl_path}"
+BASE_PATH="${base_path}"
 
 cd "\$BASE_PATH"
 
-RENEWAL_SCRIPT
+echo "[\$(date)] Starting certificate renewal for \$DOMAIN"
+
+EOF
     
     if [[ "$method" == "cloudflare" ]]; then
         cat >> "$renewal_script" << 'CLOUDFLARE_RENEWAL'
 # Cloudflare DNS renewal
 docker run --rm \
     -v "${SSL_PATH}:/etc/letsencrypt" \
-    -v /etc/letsencrypt/cloudflare.ini:/etc/letsencrypt/cloudflare.ini:ro \
     certbot/dns-cloudflare renew \
     --dns-cloudflare \
     --dns-cloudflare-credentials /etc/letsencrypt/cloudflare.ini
 
-# Extract updated certificates
-if [[ -f "${SSL_PATH}/live/${DOMAIN}/fullchain.pem" ]]; then
-    cp -L "${SSL_PATH}/live/${DOMAIN}/fullchain.pem" "${SSL_PATH}/cert.pem"
-    cp -L "${SSL_PATH}/live/${DOMAIN}/privkey.pem" "${SSL_PATH}/key.pem"
+# Extract updated certificates from archive (they're the actual files)
+ARCHIVE_DIR="${SSL_PATH}/archive/${DOMAIN}"
+if [[ -d "$ARCHIVE_DIR" ]]; then
+    # Find the latest cert (highest number)
+    LATEST_CERT=$(ls -v "${ARCHIVE_DIR}"/fullchain*.pem 2>/dev/null | tail -1)
+    LATEST_KEY=$(ls -v "${ARCHIVE_DIR}"/privkey*.pem 2>/dev/null | tail -1)
+    
+    if [[ -f "$LATEST_CERT" ]] && [[ -f "$LATEST_KEY" ]]; then
+        cp "$LATEST_CERT" "${SSL_PATH}/cert.pem"
+        cp "$LATEST_KEY" "${SSL_PATH}/key.pem"
+        chmod 644 "${SSL_PATH}/cert.pem"
+        chmod 600 "${SSL_PATH}/key.pem"
+        echo "Certificate files updated"
+    fi
 fi
 
-# Restart nginx
+# Restart nginx to pick up new cert
 docker compose restart nginx
+
+echo "[$(date)] Renewal complete"
 CLOUDFLARE_RENEWAL
     else
         cat >> "$renewal_script" << 'HTTP_RENEWAL'
@@ -910,25 +990,37 @@ docker run --rm \
     -v "${BASE_PATH}/web:/var/www/html" \
     certbot/certbot renew --webroot --webroot-path=/var/www/html
 
-# Extract updated certificates
-if [[ -f "${SSL_PATH}/live/${DOMAIN}/fullchain.pem" ]]; then
-    cp -L "${SSL_PATH}/live/${DOMAIN}/fullchain.pem" "${SSL_PATH}/cert.pem"
-    cp -L "${SSL_PATH}/live/${DOMAIN}/privkey.pem" "${SSL_PATH}/key.pem"
+# Extract updated certificates from archive (they're the actual files)
+ARCHIVE_DIR="${SSL_PATH}/archive/${DOMAIN}"
+if [[ -d "$ARCHIVE_DIR" ]]; then
+    # Find the latest cert (highest number)
+    LATEST_CERT=$(ls -v "${ARCHIVE_DIR}"/fullchain*.pem 2>/dev/null | tail -1)
+    LATEST_KEY=$(ls -v "${ARCHIVE_DIR}"/privkey*.pem 2>/dev/null | tail -1)
+    
+    if [[ -f "$LATEST_CERT" ]] && [[ -f "$LATEST_KEY" ]]; then
+        cp "$LATEST_CERT" "${SSL_PATH}/cert.pem"
+        cp "$LATEST_KEY" "${SSL_PATH}/key.pem"
+        chmod 644 "${SSL_PATH}/cert.pem"
+        chmod 600 "${SSL_PATH}/key.pem"
+        echo "Certificate files updated"
+    fi
 fi
 
-# Restart nginx
+# Restart nginx to pick up new cert
 docker compose restart nginx
+
+echo "[$(date)] Renewal complete"
 HTTP_RENEWAL
     fi
     
     chmod +x "$renewal_script"
     
-    # Add cron job
+    # Add cron job (runs weekly on Sunday at 3am)
     local cron_entry="0 3 * * 0 ${renewal_script} >> /var/log/ssl-renewal.log 2>&1"
     
     if ! crontab -l 2>/dev/null | grep -qF "renew-cert.sh"; then
         (crontab -l 2>/dev/null; echo "$cron_entry") | crontab - 2>/dev/null || true
-        print_success "Automatic renewal scheduled (weekly)"
+        print_success "Automatic renewal scheduled (weekly on Sundays at 3am)"
     fi
 }
 

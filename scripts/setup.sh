@@ -58,20 +58,26 @@ Options:
   --skip-firewall      Skip firewall configuration
   --dev                Development mode (uses self-signed SSL certificate)
   --force              Force reinstall even if already configured
+  --clean              Clean up existing installation before setup
+  --reinstall          Same as --clean
+  --uninstall          Remove all containers and networks (keeps data by default)
   --help, -h           Show this help message
 
 Examples:
   # Interactive setup (recommended for first time)
   ./scripts/setup.sh
 
-  # Automated setup with existing .env
-  ./scripts/setup.sh --non-interactive
+  # Clean reinstall (removes old containers first)
+  ./scripts/setup.sh --clean
+
+  # Uninstall everything
+  ./scripts/setup.sh --uninstall
 
   # Development/testing setup
   ./scripts/setup.sh --dev
 
-  # Skip Docker if already installed
-  ./scripts/setup.sh --skip-docker
+  # Non-interactive with force (removes volumes too)
+  ./scripts/setup.sh --clean --force --non-interactive
 
 Environment Variables:
   All configuration can be set in .env file. See .env.example for options.
@@ -106,6 +112,17 @@ parse_args() {
                 FORCE_REINSTALL=true
                 shift
                 ;;
+            --clean|--reinstall)
+                # Clean up existing installation before setup
+                cleanup_existing_installation
+                shift
+                ;;
+            --uninstall)
+                # Just uninstall, don't reinstall
+                cleanup_existing_installation
+                print_success "Uninstallation complete"
+                exit 0
+                ;;
             --help|-h)
                 show_help
                 exit 0
@@ -117,6 +134,81 @@ parse_args() {
                 ;;
         esac
     done
+}
+
+# ==============================================================================
+# Cleanup / Uninstall
+# ==============================================================================
+
+cleanup_existing_installation() {
+    print_step "Cleaning Up Existing Installation"
+    
+    local project_name="${PROJECT_NAME:-remote-support}"
+    local base_path="${BASE_PATH:-$(pwd)}"
+    
+    # Check if docker is available
+    if ! command -v docker &>/dev/null; then
+        print_warning "Docker not found, skipping container cleanup"
+        return 0
+    fi
+    
+    # Stop and remove containers using docker compose
+    print_info "Stopping containers..."
+    if [[ -f "${base_path}/docker-compose.yml" ]]; then
+        sudo docker compose -f "${base_path}/docker-compose.yml" down --remove-orphans 2>/dev/null || true
+    fi
+    
+    # Remove any remaining containers with project name
+    print_info "Removing project containers..."
+    local containers
+    containers=$(sudo docker ps -aq --filter "name=${project_name}" 2>/dev/null || true)
+    if [[ -n "$containers" ]]; then
+        echo "$containers" | xargs -r sudo docker rm -f 2>/dev/null || true
+    fi
+    
+    # Also check for alternate project names
+    for alt_name in "meshcentral-stack" "remote-support"; do
+        containers=$(sudo docker ps -aq --filter "name=${alt_name}" 2>/dev/null || true)
+        if [[ -n "$containers" ]]; then
+            echo "$containers" | xargs -r sudo docker rm -f 2>/dev/null || true
+        fi
+    done
+    
+    # Remove networks
+    print_info "Removing networks..."
+    for network in "${project_name}_internal" "${project_name}_external" "meshcentral-stack_internal" "meshcentral-stack_external" "remote-support_internal" "remote-support_external"; do
+        sudo docker network rm "$network" 2>/dev/null || true
+    done
+    sudo docker network prune -f 2>/dev/null || true
+    
+    # Remove volumes (optional - ask user if interactive)
+    local remove_volumes=false
+    if [[ "$INTERACTIVE" == "true" ]]; then
+        echo ""
+        print_warning "Do you want to remove data volumes? This will DELETE ALL DATA!"
+        if prompt_yes_no "Remove volumes?" "n"; then
+            remove_volumes=true
+        fi
+    elif [[ "$FORCE_REINSTALL" == "true" ]]; then
+        remove_volumes=true
+    fi
+    
+    if [[ "$remove_volumes" == "true" ]]; then
+        print_info "Removing volumes..."
+        local volumes
+        volumes=$(sudo docker volume ls -q | grep -E "${project_name}|meshcentral-stack|remote-support" 2>/dev/null || true)
+        if [[ -n "$volumes" ]]; then
+            echo "$volumes" | xargs -r sudo docker volume rm 2>/dev/null || true
+        fi
+    else
+        print_info "Keeping data volumes"
+    fi
+    
+    # Clean up dangling resources
+    print_info "Cleaning up dangling resources..."
+    sudo docker system prune -f 2>/dev/null || true
+    
+    print_success "Cleanup complete"
 }
 
 # ==============================================================================
@@ -156,6 +248,10 @@ print_warning() {
 
 print_info() {
     echo -e "${C_CYAN}ℹ${C_RESET} $1"
+}
+
+print_error() {
+    echo -e "${C_RED}✗${C_RESET} $1" >&2
 }
 
 prompt_value() {
@@ -361,17 +457,41 @@ get_port_process() {
     local port="$1"
     local process_info=""
     
+    # Method 1: Try ss with sudo
     if command -v ss &>/dev/null; then
-        process_info=$(ss -tlnp "sport = :$port" 2>/dev/null | grep -v "State" | awk '{print $6}' | grep -oP 'users:\("\K[^"]+' | head -1)
-    elif command -v netstat &>/dev/null; then
+        process_info=$(sudo ss -tlnp "sport = :$port" 2>/dev/null | grep -v "State" | grep -oP 'users:\(\("\K[^"]+' | head -1)
+    fi
+    
+    # Method 2: Try netstat with sudo
+    if [[ -z "$process_info" ]] && command -v netstat &>/dev/null; then
         process_info=$(sudo netstat -tlnp 2>/dev/null | grep ":$port " | awk '{print $7}' | cut -d'/' -f2 | head -1)
-    elif command -v lsof &>/dev/null; then
+    fi
+    
+    # Method 3: Try lsof with sudo
+    if [[ -z "$process_info" ]] && command -v lsof &>/dev/null; then
         process_info=$(sudo lsof -i ":$port" -sTCP:LISTEN 2>/dev/null | awk 'NR==2 {print $1}')
     fi
     
-    # If we found a process, try to get more details
+    # Method 4: Check common services directly
+    if [[ -z "$process_info" ]]; then
+        # Check if nginx is running
+        if pgrep -x nginx &>/dev/null; then
+            # Check if nginx is listening on this port
+            if sudo ss -tlnp "sport = :$port" 2>/dev/null | grep -q nginx; then
+                process_info="nginx"
+            elif sudo netstat -tlnp 2>/dev/null | grep ":$port " | grep -q nginx; then
+                process_info="nginx"
+            fi
+        fi
+        
+        # Check if apache is running
+        if [[ -z "$process_info" ]] && (pgrep -x apache2 &>/dev/null || pgrep -x httpd &>/dev/null); then
+            process_info="apache2"
+        fi
+    fi
+    
+    # If we found a process, check if it's Docker
     if [[ -n "$process_info" ]]; then
-        # Check if it's a docker container
         if [[ "$process_info" == "docker-proxy" ]] || [[ "$process_info" == "docker" ]]; then
             local container_name
             container_name=$(sudo docker ps --format '{{.Names}}' --filter "publish=$port" 2>/dev/null | head -1)
@@ -381,7 +501,17 @@ get_port_process() {
             fi
         fi
         echo "$process_info"
+        return 0
     fi
+    
+    # Last resort: Check if port is actually in use
+    if sudo ss -tln | grep -q ":${port} " || sudo netstat -tln 2>/dev/null | grep -q ":${port} "; then
+        echo "unknown"
+        return 0
+    fi
+    
+    # Port is not in use
+    return 1
 }
 
 # Stop services blocking ports
@@ -392,9 +522,10 @@ stop_blocking_services() {
     
     for port in "${ports[@]}"; do
         local process_info
-        process_info=$(get_port_process "$port")
+        process_info=$(get_port_process "$port") || true
         
         if [[ -z "$process_info" ]]; then
+            print_info "Port $port is now free"
             continue
         fi
         
@@ -410,30 +541,40 @@ stop_blocking_services() {
         case "$process_info" in
             nginx)
                 print_info "Stopping nginx..."
-                sudo systemctl stop nginx 2>/dev/null || sudo service nginx stop 2>/dev/null || true
+                sudo systemctl stop nginx 2>/dev/null || sudo service nginx stop 2>/dev/null || sudo pkill nginx 2>/dev/null || true
+                sudo systemctl disable nginx 2>/dev/null || true
                 ;;
             apache2|httpd)
                 print_info "Stopping Apache..."
                 sudo systemctl stop apache2 2>/dev/null || sudo systemctl stop httpd 2>/dev/null || sudo service apache2 stop 2>/dev/null || true
+                sudo systemctl disable apache2 2>/dev/null || sudo systemctl disable httpd 2>/dev/null || true
                 ;;
             caddy)
                 print_info "Stopping Caddy..."
                 sudo systemctl stop caddy 2>/dev/null || sudo service caddy stop 2>/dev/null || true
+                sudo systemctl disable caddy 2>/dev/null || true
                 ;;
-            *)
-                print_warning "Unknown service '$process_info' on port $port"
-                print_info "Please stop it manually: sudo kill \$(sudo lsof -t -i:$port)"
+            unknown|*)
+                print_warning "Unknown service on port $port"
+                # Try to kill whatever is using the port
+                print_info "Attempting to free port $port..."
+                sudo fuser -k "${port}/tcp" 2>/dev/null || true
                 
-                if prompt_yes_no "Try to kill process on port $port?" "n"; then
-                    sudo kill $(sudo lsof -t -i:"$port") 2>/dev/null || true
-                    sleep 2
-                fi
+                # Also try to stop common services that might be using it
+                sudo systemctl stop nginx 2>/dev/null || true
+                sudo systemctl stop apache2 2>/dev/null || true
+                sudo systemctl stop httpd 2>/dev/null || true
+                
+                # Disable them so they don't restart
+                sudo systemctl disable nginx 2>/dev/null || true
+                sudo systemctl disable apache2 2>/dev/null || true
+                sudo systemctl disable httpd 2>/dev/null || true
                 ;;
         esac
     done
     
     # Give services time to stop
-    sleep 2
+    sleep 3
     print_success "Attempted to stop blocking services"
 }
 
@@ -1802,40 +1943,108 @@ detect_and_configure_proxy() {
             echo ""
             echo "  Options:"
             echo "    1) Use existing proxy (recommended if you have SSL configured)"
-            echo "    2) Use bundled nginx (replaces existing proxy for this domain)"
+            echo "    2) Stop existing proxy and use bundled nginx"
             echo ""
             
             local choice
-            read -rp "  Select option [1-2] (default: 1): " choice
-            choice="${choice:-1}"
+            read -rp "  Select option [1-2] (default: 2): " choice
+            choice="${choice:-2}"
             
-            if [[ "$choice" == "2" ]]; then
-                print_info "Will use bundled nginx"
-                PROXY_TYPE="none"
-                USE_BUNDLED_NGINX=true
-                
-                # Need to stop the existing service
-                handle_port_conflict
-            else
+            if [[ "$choice" == "1" ]]; then
                 print_info "Will integrate with existing proxy"
                 configure_proxy_integration
                 
                 # Set environment variable to skip bundled nginx
                 export NGINX_PROFILE="disabled"
+                export USE_BUNDLED_NGINX="false"
+            else
+                print_info "Will use bundled nginx"
+                PROXY_TYPE="none"
+                USE_BUNDLED_NGINX=true
+                export NGINX_PROFILE="default"
+                export USE_BUNDLED_NGINX="true"
+                
+                # Stop the existing service
+                print_info "Stopping existing proxy service..."
+                stop_existing_proxy
             fi
         else
-            # Non-interactive: use existing proxy by default
-            print_info "Non-interactive mode: integrating with existing proxy"
-            configure_proxy_integration
-            export NGINX_PROFILE="disabled"
+            # Non-interactive: use bundled nginx by default (simpler)
+            print_info "Non-interactive mode: using bundled nginx"
+            PROXY_TYPE="none"
+            USE_BUNDLED_NGINX=true
+            export NGINX_PROFILE="default"
+            export USE_BUNDLED_NGINX="true"
+            stop_existing_proxy
         fi
     else
         print_info "No existing proxy detected - will use bundled nginx"
         USE_BUNDLED_NGINX=true
         export NGINX_PROFILE="default"
+        export USE_BUNDLED_NGINX="true"
     fi
     
     print_success "Proxy configuration complete"
+}
+
+# Stop existing proxy services
+stop_existing_proxy() {
+    print_info "Stopping existing proxy services..."
+    
+    # Stop host nginx
+    if systemctl is-active --quiet nginx 2>/dev/null; then
+        print_info "Stopping and disabling host nginx..."
+        sudo systemctl stop nginx 2>/dev/null || true
+        sudo systemctl disable nginx 2>/dev/null || true
+    fi
+    
+    # Also try to stop it via service command
+    sudo service nginx stop 2>/dev/null || true
+    
+    # Kill any remaining nginx processes
+    sudo pkill -9 nginx 2>/dev/null || true
+    
+    # Stop host apache
+    if systemctl is-active --quiet apache2 2>/dev/null || systemctl is-active --quiet httpd 2>/dev/null; then
+        print_info "Stopping and disabling Apache..."
+        sudo systemctl stop apache2 2>/dev/null || sudo systemctl stop httpd 2>/dev/null || true
+        sudo systemctl disable apache2 2>/dev/null || sudo systemctl disable httpd 2>/dev/null || true
+    fi
+    
+    # Stop host caddy
+    if systemctl is-active --quiet caddy 2>/dev/null; then
+        print_info "Stopping and disabling Caddy..."
+        sudo systemctl stop caddy 2>/dev/null || true
+        sudo systemctl disable caddy 2>/dev/null || true
+    fi
+    
+    # Free ports 80 and 443 using fuser
+    print_info "Freeing ports 80 and 443..."
+    sudo fuser -k 80/tcp 2>/dev/null || true
+    sudo fuser -k 443/tcp 2>/dev/null || true
+    
+    # Give time for processes to stop
+    sleep 3
+    
+    # Verify ports are free
+    local port_80_free=true
+    local port_443_free=true
+    
+    if sudo ss -tln | grep -q ":80 "; then
+        port_80_free=false
+        print_warning "Port 80 is still in use"
+    fi
+    
+    if sudo ss -tln | grep -q ":443 "; then
+        port_443_free=false
+        print_warning "Port 443 is still in use"
+    fi
+    
+    if [[ "$port_80_free" == "true" ]] && [[ "$port_443_free" == "true" ]]; then
+        print_success "Ports 80 and 443 are now available"
+    else
+        print_warning "Some ports may still be in use - setup will try to proceed"
+    fi
 }
 
 # Handle port conflicts when user wants to use bundled nginx
@@ -1846,7 +2055,7 @@ handle_port_conflict() {
     for port in "$http_port" "$https_port"; do
         if ! check_port_available "$port"; then
             local process_info
-            process_info=$(get_port_process "$port")
+            process_info=$(get_port_process "$port") || true
             
             print_warning "Port $port is in use by: ${process_info:-unknown}"
             

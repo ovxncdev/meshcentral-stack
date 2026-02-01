@@ -42,6 +42,11 @@ services:
       - LOCALSESSIONRECORDING=${MESHCENTRAL_SESSION_RECORDING:-true}
       - MINIFY=${MESHCENTRAL_MINIFY:-true}
       - TZ=${TZ:-UTC}
+      # nginx-proxy integration (when USE_BUNDLED_NGINX=false)
+      - VIRTUAL_HOST=${VIRTUAL_HOST:-}
+      - VIRTUAL_PORT=${VIRTUAL_PORT:-80}
+      - LETSENCRYPT_HOST=${LETSENCRYPT_HOST:-}
+      - LETSENCRYPT_EMAIL=${SSL_EMAIL:-}
     
     volumes:
       # Data persistence
@@ -58,11 +63,18 @@ services:
     
     networks:
       - internal
+      # Join external proxy network if specified
+      - ${PROXY_NETWORK:-external}
     
-    # No ports exposed directly - nginx handles external access
+    # Internal ports (nginx or external proxy connects to these)
     expose:
       - "80"
       - "443"
+    
+    # When using external proxy, optionally expose on host port
+    # Set MESHCENTRAL_HOST_PORT in .env to enable (e.g., 8080)
+    ports:
+      - "${MESHCENTRAL_HOST_PORT:-}:80"
     
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:80/", "||", "exit", "1"]
@@ -87,10 +99,17 @@ services:
   # ============================================================================
   # Nginx - Reverse Proxy & SSL Termination
   # ============================================================================
+  # This service is OPTIONAL - it won't start if USE_BUNDLED_NGINX=false
+  # When using an external proxy (nginx-proxy, Traefik, host nginx), 
+  # set USE_BUNDLED_NGINX=false in .env
   nginx:
     image: nginx:${NGINX_VERSION:-alpine}
     container_name: ${PROJECT_NAME:-remote-support}-nginx
     restart: unless-stopped
+    
+    # Only start if USE_BUNDLED_NGINX is true (default)
+    profiles:
+      - ${NGINX_PROFILE:-default}
     
     depends_on:
       meshcentral:

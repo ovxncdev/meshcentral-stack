@@ -515,6 +515,30 @@ get_port_process() {
     return 1
 }
 
+# Check if a port is available
+check_port_available() {
+    local port="$1"
+    
+    # Use ss if available (preferred)
+    if command -v ss &>/dev/null; then
+        if ss -tuln 2>/dev/null | grep -q ":${port} "; then
+            return 1  # Port is in use
+        fi
+        return 0  # Port is available
+    fi
+    
+    # Fallback to netstat
+    if command -v netstat &>/dev/null; then
+        if netstat -tuln 2>/dev/null | grep -q ":${port} "; then
+            return 1  # Port is in use
+        fi
+        return 0  # Port is available
+    fi
+    
+    # If neither command available, assume port is available
+    return 0
+}
+
 # Stop services blocking ports
 stop_blocking_services() {
     local ports=("$@")

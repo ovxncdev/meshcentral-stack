@@ -752,24 +752,197 @@ ssl_cloudflare_origin() {
     
     echo ""
     echo "  ┌─────────────────────────────────────────────────────────────────┐"
-    echo "  │  How to get a Cloudflare Origin Certificate:                    │"
+    echo "  │           Cloudflare Origin Certificate Options                 │"
     echo "  ├─────────────────────────────────────────────────────────────────┤"
     echo "  │                                                                 │"
-    echo "  │  1. Go to Cloudflare Dashboard → Your Domain                    │"
-    echo "  │  2. Navigate to: SSL/TLS → Origin Server                        │"
-    echo "  │  3. Click 'Create Certificate'                                  │"
-    echo "  │  4. Select:                                                     │"
-    echo "  │     • Generate private key with Cloudflare                      │"
-    echo "  │     • Hostnames: *.${domain}, ${domain}"
-    echo "  │     • Validity: 15 years                                        │"
-    echo "  │  5. Click 'Create' and copy both certificate and key            │"
+    echo "  │  1) Generate CSR here (Recommended - key stays on server)       │"
+    echo "  │     • We generate private key & CSR                             │"
+    echo "  │     • You paste CSR into Cloudflare                             │"
+    echo "  │     • Cloudflare signs it and you paste cert back               │"
     echo "  │                                                                 │"
-    echo "  │  IMPORTANT: Set Cloudflare SSL mode to 'Full (strict)'          │"
+    echo "  │  2) Let Cloudflare generate both (easier but less secure)       │"
+    echo "  │     • Cloudflare generates key & cert                           │"
+    echo "  │     • You paste both here                                       │"
+    echo "  │                                                                 │"
+    echo "  │  3) I already have certificate files                            │"
+    echo "  │     • Paste existing cert and key                               │"
     echo "  │                                                                 │"
     echo "  └─────────────────────────────────────────────────────────────────┘"
     echo ""
     
-    if ! prompt_yes_no "Do you have the Cloudflare Origin Certificate ready?" "n"; then
+    local choice
+    read -rp "  Select option [1-3] (default: 1): " choice
+    choice="${choice:-1}"
+    
+    case "$choice" in
+        1)
+            ssl_cloudflare_with_csr "$domain" "$ssl_path"
+            ;;
+        2|3)
+            ssl_cloudflare_paste_both "$domain" "$ssl_path"
+            ;;
+        *)
+            print_warning "Invalid choice"
+            ssl_generate_self_signed "$domain" "$ssl_path"
+            ;;
+    esac
+}
+
+# ==============================================================================
+# Cloudflare Origin with CSR (private key stays on server)
+# ==============================================================================
+
+ssl_cloudflare_with_csr() {
+    local domain="$1"
+    local ssl_path="$2"
+    
+    print_info "Generating private key and CSR..."
+    
+    local key_file="${ssl_path}/key.pem"
+    local csr_file="${ssl_path}/csr.pem"
+    
+    # Generate private key
+    run_with_sudo openssl genrsa -out "$key_file" 2048 2>/dev/null
+    run_with_sudo chmod 600 "$key_file"
+    
+    # Generate CSR with SAN for wildcard
+    local csr_config=$(mktemp)
+    cat > "$csr_config" << CSRCONF
+[req]
+default_bits = 2048
+prompt = no
+default_md = sha256
+req_extensions = req_ext
+distinguished_name = dn
+
+[dn]
+CN = ${domain}
+O = Organization
+C = US
+
+[req_ext]
+subjectAltName = @alt_names
+
+[alt_names]
+DNS.1 = ${domain}
+DNS.2 = *.${domain}
+CSRCONF
+    
+    run_with_sudo openssl req -new -key "$key_file" -out "$csr_file" -config "$csr_config" 2>/dev/null
+    rm -f "$csr_config"
+    
+    if [[ ! -f "$csr_file" ]]; then
+        print_error "Failed to generate CSR"
+        ssl_generate_self_signed "$domain" "$ssl_path"
+        return $?
+    fi
+    
+    # Display CSR for user to copy
+    echo ""
+    echo "  ┌─────────────────────────────────────────────────────────────────┐"
+    echo "  │  CSR Generated! Follow these steps:                             │"
+    echo "  ├─────────────────────────────────────────────────────────────────┤"
+    echo "  │                                                                 │"
+    echo "  │  1. Go to: Cloudflare Dashboard → ${domain}"
+    echo "  │  2. Navigate to: SSL/TLS → Origin Server                        │"
+    echo "  │  3. Click 'Create Certificate'                                  │"
+    echo "  │  4. Select: 'Use my private key and CSR'                        │"
+    echo "  │  5. Paste the CSR shown below                                   │"
+    echo "  │  6. Set validity to 15 years                                    │"
+    echo "  │  7. Click 'Create'                                              │"
+    echo "  │  8. Copy the certificate Cloudflare gives you                   │"
+    echo "  │                                                                 │"
+    echo "  └─────────────────────────────────────────────────────────────────┘"
+    echo ""
+    echo "  ══════════════════ COPY THIS CSR ══════════════════"
+    echo ""
+    run_with_sudo cat "$csr_file"
+    echo ""
+    echo "  ════════════════════════════════════════════════════"
+    echo ""
+    
+    # Wait for user to paste certificate
+    if ! prompt_yes_no "Have you created the certificate in Cloudflare?" "n"; then
+        print_info "You can complete this later by running: ./scripts/setup.sh --ssl"
+        print_info "Falling back to self-signed certificate for now..."
+        ssl_generate_self_signed "$domain" "$ssl_path"
+        return $?
+    fi
+    
+    echo ""
+    echo "  Paste the CERTIFICATE from Cloudflare:"
+    echo "  (Paste everything including -----BEGIN CERTIFICATE-----)"
+    echo "  (Press Ctrl+D on an empty line when done)"
+    echo ""
+    
+    local cert_content=""
+    while IFS= read -r line; do
+        cert_content+="$line"$'\n'
+    done
+    
+    if [[ -z "$cert_content" ]] || [[ ! "$cert_content" =~ "BEGIN CERTIFICATE" ]]; then
+        print_error "Invalid certificate format"
+        print_info "Falling back to self-signed certificate..."
+        ssl_generate_self_signed "$domain" "$ssl_path"
+        return $?
+    fi
+    
+    # Save certificate
+    echo "$cert_content" | run_with_sudo tee "${ssl_path}/cert.pem" > /dev/null
+    run_with_sudo chmod 644 "${ssl_path}/cert.pem"
+    
+    # Verify certificate matches key
+    local cert_modulus key_modulus
+    cert_modulus=$(run_with_sudo openssl x509 -noout -modulus -in "${ssl_path}/cert.pem" 2>/dev/null | md5sum)
+    key_modulus=$(run_with_sudo openssl rsa -noout -modulus -in "${ssl_path}/key.pem" 2>/dev/null | md5sum)
+    
+    if [[ "$cert_modulus" != "$key_modulus" ]]; then
+        print_error "Certificate does not match the private key!"
+        print_info "Make sure you used the CSR shown above in Cloudflare"
+        ssl_generate_self_signed "$domain" "$ssl_path"
+        return $?
+    fi
+    
+    print_success "Cloudflare Origin Certificate installed!"
+    ssl_configure_nginx "${ssl_path}/cert.pem" "${ssl_path}/key.pem" "$domain"
+    
+    # Clean up CSR
+    run_with_sudo rm -f "$csr_file"
+    
+    echo ""
+    print_warning "IMPORTANT: Set Cloudflare SSL mode to 'Full (strict)'"
+    print_info "  Cloudflare Dashboard → SSL/TLS → Overview → Full (strict)"
+    echo ""
+    
+    return 0
+}
+
+# ==============================================================================
+# Cloudflare Origin - Paste both cert and key
+# ==============================================================================
+
+ssl_cloudflare_paste_both() {
+    local domain="$1"
+    local ssl_path="$2"
+    
+    echo ""
+    echo "  ┌─────────────────────────────────────────────────────────────────┐"
+    echo "  │  Get certificate from Cloudflare:                               │"
+    echo "  ├─────────────────────────────────────────────────────────────────┤"
+    echo "  │                                                                 │"
+    echo "  │  1. Go to: Cloudflare Dashboard → ${domain}"
+    echo "  │  2. Navigate to: SSL/TLS → Origin Server                        │"
+    echo "  │  3. Click 'Create Certificate'                                  │"
+    echo "  │  4. Select: 'Generate private key and CSR with Cloudflare'      │"
+    echo "  │  5. Hostnames: *.${domain}, ${domain}"
+    echo "  │  6. Validity: 15 years                                          │"
+    echo "  │  7. Click 'Create'                                              │"
+    echo "  │  8. Copy BOTH the Certificate AND Private Key                   │"
+    echo "  │                                                                 │"
+    echo "  └─────────────────────────────────────────────────────────────────┘"
+    echo ""
+    
+    if ! prompt_yes_no "Do you have the certificate and key ready?" "n"; then
         print_info "Falling back to self-signed certificate..."
         ssl_generate_self_signed "$domain" "$ssl_path"
         return $?
@@ -822,7 +995,9 @@ ssl_cloudflare_origin() {
         ssl_configure_nginx "${ssl_path}/cert.pem" "${ssl_path}/key.pem" "$domain"
         
         echo ""
-        print_warning "Remember to set Cloudflare SSL mode to 'Full (strict)'"
+        print_warning "IMPORTANT: Set Cloudflare SSL mode to 'Full (strict)'"
+        print_info "  Cloudflare Dashboard → SSL/TLS → Overview → Full (strict)"
+        echo ""
         return 0
     fi
     

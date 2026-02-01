@@ -1315,11 +1315,11 @@ generate_self_signed_cert() {
     
     print_info "Generating self-signed certificate for: $domain"
     
-    # Ensure ssl_path exists
+    # Ensure ssl_path exists with correct permissions
     if [[ ! -d "$ssl_path" ]]; then
-        mkdir -p "$ssl_path" 2>/dev/null || sudo mkdir -p "$ssl_path"
-        chmod 700 "$ssl_path" 2>/dev/null || sudo chmod 700 "$ssl_path"
+        sudo mkdir -p "$ssl_path"
     fi
+    sudo chmod 755 "$ssl_path"
     
     local cert_file="${ssl_path}/cert.pem"
     local key_file="${ssl_path}/key.pem"
@@ -1330,26 +1330,29 @@ generate_self_signed_cert() {
         return 0
     fi
     
-    # Generate cert with SAN for compatibility
-    if ! openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+    # Remove old certs if they exist (might have wrong permissions)
+    sudo rm -f "$cert_file" "$key_file" 2>/dev/null || true
+    
+    # Generate cert with SAN for compatibility (use sudo for permission)
+    if ! sudo openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
         -keyout "$key_file" \
         -out "$cert_file" \
         -subj "/CN=${domain}/O=Remote Support/C=US" \
         -addext "subjectAltName=DNS:${domain},DNS:localhost,IP:127.0.0.1" \
         2>/dev/null; then
         # Fallback without -addext for older openssl
-        openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+        if ! sudo openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
             -keyout "$key_file" \
             -out "$cert_file" \
             -subj "/CN=${domain}/O=Remote Support/C=US" \
-            2>/dev/null || {
-                print_error "Failed to generate SSL certificate"
-                return 1
-            }
+            2>/dev/null; then
+            print_error "Failed to generate SSL certificate"
+            return 1
+        fi
     fi
     
-    chmod 600 "$key_file" 2>/dev/null || sudo chmod 600 "$key_file"
-    chmod 644 "$cert_file" 2>/dev/null || sudo chmod 644 "$cert_file"
+    sudo chmod 600 "$key_file"
+    sudo chmod 644 "$cert_file"
     
     configure_nginx_ssl "$cert_file" "$key_file" "$domain"
     

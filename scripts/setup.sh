@@ -617,7 +617,7 @@ setup_ssl() {
     local found_cert=""
     local found_key=""
     
-    scan_for_certificates "$domain" found_cert found_key
+    scan_for_certificates "$domain" found_cert found_key || true
     
     if [[ -n "$found_cert" ]] && [[ -n "$found_key" ]]; then
         print_success "Found valid certificate!"

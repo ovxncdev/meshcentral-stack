@@ -18,18 +18,33 @@
 const https = require('https');
 const http = require('http');
 const crypto = require('crypto');
-const BaseModule = require('./base');
 
 // ==============================================================================
 // WebhookModule Class
 // ==============================================================================
 
-class WebhookModule extends BaseModule {
-  name = 'webhook';
-  displayName = 'Webhooks';
-  description = 'Configure incoming and outgoing webhooks';
-  icon = 'link';
-  
+class WebhookModule {
+  constructor(configManager) {
+    this.configManager = configManager;
+    this.name = 'webhook';
+    this.displayName = 'Webhooks';
+    this.description = 'Configure incoming and outgoing webhooks';
+    this.icon = 'link';
+    this._initialized = false;
+  }
+
+  /**
+   * Initialize the module
+   */
+  async init() {
+    // Ensure default settings exist
+    const settings = await this.getSettings();
+    if (!settings.incomingSecret) {
+      await this.saveSettings({ incomingSecret: this._generateSecret() });
+    }
+    this._initialized = true;
+  }
+
   /**
    * Get default settings
    */
@@ -39,7 +54,7 @@ class WebhookModule extends BaseModule {
       
       // Incoming webhook (from MeshCentral)
       incomingEnabled: true,
-      incomingSecret: this._generateSecret(),
+      incomingSecret: '',
       
       // Webhook endpoint configuration
       webhookProtocol: 'http',
@@ -63,200 +78,161 @@ class WebhookModule extends BaseModule {
       maxLogEntries: 100
     };
   }
-  
+
   /**
    * Get settings schema for UI
    */
   getSchema() {
-    return [
-      {
-        key: 'enabled',
-        type: 'boolean',
-        label: 'Enable Webhooks',
-        description: 'Enable webhook functionality'
-      },
-      
-      // Incoming Webhooks Section
-      {
-        key: 'section_incoming',
-        type: 'section',
-        label: 'Incoming Webhooks (from MeshCentral)'
-      },
-      {
-        key: 'incomingEnabled',
-        type: 'boolean',
-        label: 'Enable Incoming Webhooks',
-        description: 'Accept webhooks from MeshCentral',
-        dependsOn: 'enabled'
-      },
-      {
-        key: 'incomingSecret',
-        type: 'password',
-        label: 'Webhook Secret',
-        description: 'Secret key to verify webhook requests (auto-generated)',
-        dependsOn: 'incomingEnabled'
-      },
-      {
-        key: 'section_endpoint',
-        type: 'section',
-        label: 'Webhook Endpoint Configuration'
-      },
-      {
-        key: 'webhookProtocol',
-        type: 'select',
-        label: 'Protocol',
-        description: 'Protocol for webhook URL',
-        options: [
-          { value: 'http', label: 'HTTP' },
-          { value: 'https', label: 'HTTPS' }
-        ],
-        dependsOn: 'incomingEnabled'
-      },
-      {
-        key: 'webhookHost',
-        type: 'text',
-        label: 'Webhook Host',
-        description: 'Hostname or IP for webhook URL (use "admin" for Docker internal, or your server IP for external)',
-        placeholder: 'admin or 192.168.1.100',
-        dependsOn: 'incomingEnabled'
-      },
-      {
-        key: 'webhookPort',
-        type: 'text',
-        label: 'Webhook Port',
-        description: 'Port number for webhook URL (leave empty to use default)',
-        placeholder: '3001',
-        dependsOn: 'incomingEnabled'
-      },
-      {
-        key: 'webhookUrl',
-        type: 'readonly',
-        label: 'Webhook URL',
-        description: 'Configure this URL in MeshCentral',
-        value: '/api/webhook/meshcentral',
-        dependsOn: 'incomingEnabled'
-      },
-      
-      // Outgoing Webhooks Section
-      {
-        key: 'section_outgoing',
-        type: 'section',
-        label: 'Outgoing Webhooks (to External Services)'
-      },
-      {
-        key: 'outgoingEnabled',
-        type: 'boolean',
-        label: 'Enable Outgoing Webhooks',
-        description: 'Send events to external URLs',
-        dependsOn: 'enabled'
-      },
-      {
-        key: 'outgoingWebhooks',
-        type: 'array',
-        label: 'Webhook Endpoints',
-        description: 'External URLs to receive events',
-        dependsOn: 'outgoingEnabled',
-        itemSchema: [
-          {
-            key: 'name',
-            type: 'text',
-            label: 'Name',
-            placeholder: 'My Webhook'
-          },
-          {
-            key: 'url',
-            type: 'text',
-            label: 'URL',
-            placeholder: 'https://example.com/webhook'
-          },
-          {
-            key: 'events',
-            type: 'multiselect',
-            label: 'Events',
-            options: [
-              { value: 'device.connect', label: 'Device Connect' },
-              { value: 'device.disconnect', label: 'Device Disconnect' },
-              { value: 'user.login', label: 'User Login' },
-              { value: 'support.request', label: 'Support Request' }
-            ]
-          },
-          {
-            key: 'secret',
-            type: 'text',
-            label: 'Secret (optional)',
-            placeholder: 'Shared secret for HMAC'
-          },
-          {
-            key: 'enabled',
-            type: 'boolean',
-            label: 'Enabled'
-          }
-        ]
-      },
-      
-      // Logging Section
-      {
-        key: 'section_logging',
-        type: 'section',
-        label: 'Logging'
-      },
-      {
-        key: 'logEvents',
-        type: 'boolean',
-        label: 'Log Webhook Events',
-        description: 'Keep a log of received webhook events',
-        dependsOn: 'enabled'
-      },
-      {
-        key: 'maxLogEntries',
-        type: 'number',
-        label: 'Max Log Entries',
-        description: 'Maximum number of log entries to keep',
-        dependsOn: 'logEvents',
-        validation: {
-          min: 10,
-          max: 1000
+    return {
+      title: 'Webhook Settings',
+      description: 'Configure incoming and outgoing webhooks',
+      type: 'object',
+      sections: [
+        {
+          title: 'Incoming Webhooks (from MeshCentral)',
+          fields: ['enabled', 'incomingEnabled', 'incomingSecret', 'webhookProtocol', 'webhookHost', 'webhookPort']
+        },
+        {
+          title: 'Outgoing Webhooks (to External Services)',
+          fields: ['outgoingEnabled', 'outgoingWebhooks']
+        },
+        {
+          title: 'Logging',
+          fields: ['logEvents', 'maxLogEntries']
         }
-      }
-    ];
+      ],
+      properties: {
+        enabled: {
+          type: 'boolean',
+          title: 'Enable Webhooks',
+          description: 'Enable webhook functionality',
+          default: true
+        },
+        incomingEnabled: {
+          type: 'boolean',
+          title: 'Enable Incoming Webhooks',
+          description: 'Accept webhooks from MeshCentral',
+          dependsOn: 'enabled'
+        },
+        incomingSecret: {
+          type: 'password',
+          title: 'Webhook Secret',
+          description: 'Secret key to verify webhook requests (auto-generated)',
+          dependsOn: 'incomingEnabled'
+        },
+        webhookProtocol: {
+          type: 'select',
+          title: 'Protocol',
+          description: 'Protocol for webhook URL',
+          options: [
+            { value: 'http', label: 'HTTP' },
+            { value: 'https', label: 'HTTPS' }
+          ],
+          dependsOn: 'incomingEnabled'
+        },
+        webhookHost: {
+          type: 'string',
+          title: 'Webhook Host',
+          description: 'Hostname or IP for webhook URL (use "admin" for Docker internal)',
+          placeholder: 'admin or 192.168.1.100',
+          dependsOn: 'incomingEnabled'
+        },
+        webhookPort: {
+          type: 'string',
+          title: 'Webhook Port',
+          description: 'Port number for webhook URL (leave empty for default)',
+          placeholder: '3001',
+          dependsOn: 'incomingEnabled'
+        },
+        outgoingEnabled: {
+          type: 'boolean',
+          title: 'Enable Outgoing Webhooks',
+          description: 'Send events to external URLs',
+          dependsOn: 'enabled'
+        },
+        outgoingWebhooks: {
+          type: 'array',
+          title: 'Webhook Endpoints',
+          description: 'External URLs to receive events',
+          dependsOn: 'outgoingEnabled',
+          items: {
+            type: 'object',
+            properties: {
+              name: { type: 'string', title: 'Name', placeholder: 'My Webhook' },
+              url: { type: 'string', title: 'URL', placeholder: 'https://example.com/webhook' },
+              events: {
+                type: 'array',
+                title: 'Events',
+                items: { type: 'string' },
+                options: [
+                  { value: 'device.connect', label: 'Device Connect' },
+                  { value: 'device.disconnect', label: 'Device Disconnect' },
+                  { value: 'user.login', label: 'User Login' },
+                  { value: 'support.request', label: 'Support Request' }
+                ]
+              },
+              secret: { type: 'string', title: 'Secret (optional)', placeholder: 'Shared secret for HMAC' },
+              enabled: { type: 'boolean', title: 'Enabled', default: true }
+            }
+          }
+        },
+        logEvents: {
+          type: 'boolean',
+          title: 'Log Webhook Events',
+          description: 'Keep a log of received webhook events',
+          default: true,
+          dependsOn: 'enabled'
+        },
+        maxLogEntries: {
+          type: 'number',
+          title: 'Max Log Entries',
+          description: 'Maximum number of log entries to keep',
+          default: 100,
+          minimum: 10,
+          maximum: 1000,
+          dependsOn: 'logEvents'
+        }
+      },
+      actions: [
+        {
+          name: 'regenerateSecret',
+          title: 'Regenerate Secret',
+          icon: 'refresh',
+          description: 'Generate a new webhook secret',
+          confirm: 'This will invalidate the current secret. Continue?'
+        },
+        {
+          name: 'testOutgoing',
+          title: 'Test Outgoing Webhook',
+          icon: 'send',
+          description: 'Send a test event to all enabled outgoing webhooks'
+        },
+        {
+          name: 'viewLogs',
+          title: 'View Logs',
+          icon: 'list',
+          description: 'View recent webhook events'
+        },
+        {
+          name: 'clearLogs',
+          title: 'Clear Logs',
+          icon: 'trash',
+          description: 'Clear webhook event logs',
+          confirm: 'Clear all webhook logs?'
+        }
+      ]
+    };
   }
-  
+
   /**
    * Get available actions
    */
   getActions() {
-    return [
-      {
-        name: 'regenerateSecret',
-        label: 'Regenerate Secret',
-        icon: 'refresh',
-        description: 'Generate a new webhook secret',
-        confirm: 'This will invalidate the current secret. Continue?'
-      },
-      {
-        name: 'testOutgoing',
-        label: 'Test Outgoing Webhook',
-        icon: 'send',
-        description: 'Send a test event to all enabled outgoing webhooks'
-      },
-      {
-        name: 'clearLogs',
-        label: 'Clear Logs',
-        icon: 'trash',
-        description: 'Clear webhook event logs',
-        confirm: 'Clear all webhook logs?'
-      },
-      {
-        name: 'viewLogs',
-        label: 'View Logs',
-        icon: 'list',
-        description: 'View recent webhook events'
-      }
-    ];
+    return this.getSchema().actions || [];
   }
-  
+
   /**
-   * Get handled events
+   * Get events this module handles
    */
   getHandledEvents() {
     return [
@@ -267,15 +243,77 @@ class WebhookModule extends BaseModule {
       'support.request'
     ];
   }
-  
+
+  // ==============================================================================
+  // Settings Methods
+  // ==============================================================================
+
+  /**
+   * Get current settings
+   */
+  async getSettings() {
+    const saved = await this.configManager.get('webhook');
+    return { ...this.getDefaultSettings(), ...saved };
+  }
+
+  /**
+   * Get settings synchronously (for compatibility)
+   */
+  getSettingsSync() {
+    const saved = this.configManager.getSync('webhook') || {};
+    return { ...this.getDefaultSettings(), ...saved };
+  }
+
+  /**
+   * Save settings
+   */
+  async saveSettings(newSettings) {
+    const current = await this.getSettings();
+    const merged = { ...current, ...newSettings, updatedAt: new Date().toISOString() };
+    await this.configManager.set('webhook', merged);
+    return { success: true };
+  }
+
+  /**
+   * Check if module is enabled
+   */
+  isEnabled() {
+    const settings = this.getSettingsSync();
+    return settings.enabled !== false;
+  }
+
   // ==============================================================================
   // Actions
   // ==============================================================================
-  
+
+  /**
+   * Execute an action
+   */
+  async executeAction(action, params = {}, user = null) {
+    // Check admin for sensitive actions
+    const adminActions = ['regenerateSecret', 'clearLogs'];
+    if (adminActions.includes(action) && user && !user.isAdmin) {
+      throw new Error('Admin access required');
+    }
+
+    switch (action) {
+      case 'regenerateSecret':
+        return this._actionRegenerateSecret(params);
+      case 'testOutgoing':
+        return this._actionTestOutgoing(params);
+      case 'viewLogs':
+        return this._actionViewLogs(params);
+      case 'clearLogs':
+        return this._actionClearLogs(params);
+      default:
+        throw new Error(`Unknown action: ${action}`);
+    }
+  }
+
   /**
    * Regenerate webhook secret
    */
-  async action_regenerateSecret(params) {
+  async _actionRegenerateSecret(params) {
     const newSecret = this._generateSecret();
     await this.saveSettings({ incomingSecret: newSecret });
     
@@ -285,12 +323,12 @@ class WebhookModule extends BaseModule {
       secret: newSecret
     };
   }
-  
+
   /**
    * Test outgoing webhooks
    */
-  async action_testOutgoing(params) {
-    const settings = this.getSettings();
+  async _actionTestOutgoing(params) {
+    const settings = await this.getSettings();
     
     if (!settings.outgoingEnabled) {
       throw new Error('Outgoing webhooks are not enabled');
@@ -325,11 +363,11 @@ class WebhookModule extends BaseModule {
       results
     };
   }
-  
+
   /**
    * Clear webhook logs
    */
-  async action_clearLogs(params) {
+  async _actionClearLogs(params) {
     await this.saveSettings({ _eventLog: [] });
     
     return {
@@ -337,12 +375,12 @@ class WebhookModule extends BaseModule {
       message: 'Webhook logs cleared'
     };
   }
-  
+
   /**
    * View webhook logs
    */
-  async action_viewLogs(params) {
-    const settings = this.getSettings();
+  async _actionViewLogs(params) {
+    const settings = await this.getSettings();
     const logs = settings._eventLog || [];
     
     return {
@@ -350,11 +388,11 @@ class WebhookModule extends BaseModule {
       logs: logs.slice(-50) // Return last 50 entries
     };
   }
-  
+
   // ==============================================================================
   // Incoming Webhook Processing
   // ==============================================================================
-  
+
   /**
    * Process incoming webhook from MeshCentral
    * @param {object} payload - Webhook payload
@@ -362,7 +400,7 @@ class WebhookModule extends BaseModule {
    * @returns {object} Processing result
    */
   async processIncoming(payload, signature) {
-    const settings = this.getSettings();
+    const settings = await this.getSettings();
     
     if (!settings.enabled || !settings.incomingEnabled) {
       throw new Error('Incoming webhooks are disabled');
@@ -392,16 +430,16 @@ class WebhookModule extends BaseModule {
       payload: normalizedPayload
     };
   }
-  
+
   // ==============================================================================
   // Event Handling
   // ==============================================================================
-  
+
   /**
    * Handle events (sends to outgoing webhooks)
    */
   async handleEvent(eventType, payload) {
-    const settings = this.getSettings();
+    const settings = await this.getSettings();
     
     if (!settings.enabled || !settings.outgoingEnabled) {
       return { handled: false, reason: 'Outgoing webhooks disabled' };
@@ -434,11 +472,24 @@ class WebhookModule extends BaseModule {
     
     return { handled: true, results };
   }
-  
+
+  /**
+   * Handle webhook from external source (called by telegram module, etc.)
+   */
+  async handleWebhook(source, payload) {
+    // Log it
+    const settings = await this.getSettings();
+    if (settings.logEvents) {
+      await this._logEvent(`incoming.${source}`, payload);
+    }
+    
+    return { received: true, source };
+  }
+
   // ==============================================================================
   // Private Methods
   // ==============================================================================
-  
+
   /**
    * Generate random secret
    * @private
@@ -446,7 +497,7 @@ class WebhookModule extends BaseModule {
   _generateSecret() {
     return crypto.randomBytes(32).toString('hex');
   }
-  
+
   /**
    * Verify webhook signature
    * @private
@@ -458,12 +509,20 @@ class WebhookModule extends BaseModule {
       .update(payloadString)
       .digest('hex');
     
-    return crypto.timingSafeEqual(
-      Buffer.from(signature),
-      Buffer.from(expectedSignature)
-    );
+    // Handle both raw signature and prefixed signature
+    const cleanSignature = signature.replace(/^sha256=/, '');
+    
+    try {
+      return crypto.timingSafeEqual(
+        Buffer.from(cleanSignature),
+        Buffer.from(expectedSignature)
+      );
+    } catch (e) {
+      // If buffers are different lengths, timingSafeEqual throws
+      return false;
+    }
   }
-  
+
   /**
    * Map MeshCentral event type to our event type
    * @private
@@ -471,7 +530,7 @@ class WebhookModule extends BaseModule {
   _mapEventType(meshcentralEvent, mapping) {
     return mapping[meshcentralEvent] || meshcentralEvent;
   }
-  
+
   /**
    * Normalize payload from MeshCentral format
    * @private
@@ -490,9 +549,20 @@ class WebhookModule extends BaseModule {
       normalized.ipAddress = device.ip || 'Unknown';
     }
     
+    // Direct fields (some MeshCentral events)
+    if (payload.nodename) {
+      normalized.deviceName = payload.nodename;
+    }
+    if (payload.ip || payload.addr) {
+      normalized.ipAddress = payload.ip || payload.addr;
+    }
+    
     // User info
     if (payload.user) {
-      normalized.userName = payload.user.name || payload.user;
+      normalized.userName = typeof payload.user === 'string' ? payload.user : payload.user.name;
+    }
+    if (payload.username) {
+      normalized.userName = payload.username;
     }
     
     // Group info
@@ -507,7 +577,7 @@ class WebhookModule extends BaseModule {
     
     return normalized;
   }
-  
+
   /**
    * Send outgoing webhook
    * @private
@@ -532,7 +602,7 @@ class WebhookModule extends BaseModule {
           .createHmac('sha256', webhook.secret)
           .update(data)
           .digest('hex');
-        headers['X-Webhook-Signature'] = signature;
+        headers['X-Webhook-Signature'] = `sha256=${signature}`;
       }
       
       const options = {
@@ -540,7 +610,8 @@ class WebhookModule extends BaseModule {
         port: url.port || (isHttps ? 443 : 80),
         path: url.pathname + url.search,
         method: 'POST',
-        headers
+        headers,
+        timeout: 10000
       };
       
       const req = client.request(options, (res) => {
@@ -563,7 +634,7 @@ class WebhookModule extends BaseModule {
         reject(new Error(`Request failed: ${error.message}`));
       });
       
-      req.setTimeout(10000, () => {
+      req.on('timeout', () => {
         req.destroy();
         reject(new Error('Request timed out'));
       });
@@ -572,18 +643,19 @@ class WebhookModule extends BaseModule {
       req.end();
     });
   }
-  
+
   /**
    * Log webhook event
    * @private
    */
   async _logEvent(eventType, payload) {
-    const settings = this.getSettings();
+    const settings = await this.getSettings();
     const logs = settings._eventLog || [];
     
     logs.push({
       timestamp: new Date().toISOString(),
       eventType,
+      summary: this._getEventSummary(eventType, payload),
       payload: JSON.stringify(payload).substring(0, 500) // Truncate large payloads
     });
     
@@ -595,24 +667,51 @@ class WebhookModule extends BaseModule {
     
     await this.saveSettings({ _eventLog: logs });
   }
-  
+
+  /**
+   * Get a short summary of an event for logs
+   * @private
+   */
+  _getEventSummary(eventType, payload) {
+    const deviceName = payload.nodename || payload.node?.name || payload.device?.name || '';
+    const userName = payload.username || payload.user?.name || payload.user || '';
+    const ip = payload.ip || payload.addr || '';
+    
+    if (deviceName) {
+      return `${deviceName}${ip ? ` (${ip})` : ''}`;
+    }
+    if (userName) {
+      return `${userName}${ip ? ` from ${ip}` : ''}`;
+    }
+    return ip || 'Unknown';
+  }
+
   /**
    * Get MeshCentral webhook configuration
    * Returns the config to add to MeshCentral's config.json
    */
   getMeshCentralConfig() {
-    const settings = this.getSettings();
+    const settings = this.getSettingsSync();
     const webhookHost = settings.webhookHost || 'admin';
     const webhookPort = settings.webhookPort || process.env.PORT || 3001;
     const webhookProtocol = settings.webhookProtocol || 'http';
     
-    const baseUrl = `${webhookProtocol}://${webhookHost}:${webhookPort}/api/webhook/meshcentral`;
+    const baseUrl = `${webhookProtocol}://${webhookHost}${webhookPort ? ':' + webhookPort : ''}/api/webhook/meshcentral`;
     const secretParam = settings.incomingSecret ? `?secret=${settings.incomingSecret}` : '';
     
     return {
-      webhooks: {
-        serverConnect: `${baseUrl}${secretParam}`,
-        serverDisconnect: `${baseUrl}${secretParam}`
+      webhookUrl: `${baseUrl}${secretParam}`,
+      config: {
+        settings: {
+          plugins: {
+            webhooks: {
+              serverConnect: `${baseUrl}${secretParam}`,
+              serverDisconnect: `${baseUrl}${secretParam}`,
+              userLogin: `${baseUrl}${secretParam}`,
+              userLogout: `${baseUrl}${secretParam}`
+            }
+          }
+        }
       }
     };
   }

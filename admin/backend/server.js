@@ -78,6 +78,52 @@ if (NODE_ENV !== 'production') {
 app.use(express.static(path.join(__dirname, 'frontend')));
 
 // ==============================================================================
+// File Downloads
+// ==============================================================================
+
+// Serve uploaded files for direct download
+app.get('/downloads/:filename', async (req, res) => {
+  try {
+    const moduleLoader = app.locals.moduleLoader;
+    
+    if (!moduleLoader || !moduleLoader.has('files')) {
+      return res.status(503).send('File hosting not available');
+    }
+    
+    const filesModule = moduleLoader.get('files');
+    const filename = decodeURIComponent(req.params.filename);
+    const file = filesModule.getFileByName(filename);
+    
+    if (!file) {
+      return res.status(404).send('File not found');
+    }
+    
+    const filepath = path.join(filesModule.getUploadsDir(), file.filename);
+    
+    // Check if file exists
+    const fs = require('fs');
+    if (!fs.existsSync(filepath)) {
+      return res.status(404).send('File not found on disk');
+    }
+    
+    // Increment download count
+    await filesModule.incrementDownloads(file.id);
+    
+    // Set headers for download
+    res.setHeader('Content-Disposition', `attachment; filename="${file.originalName || file.filename}"`);
+    res.setHeader('Content-Type', file.mimeType || 'application/octet-stream');
+    
+    // Stream the file
+    const fileStream = fs.createReadStream(filepath);
+    fileStream.pipe(res);
+    
+  } catch (error) {
+    console.error('Download error:', error);
+    res.status(500).send('Download failed');
+  }
+});
+
+// ==============================================================================
 // API Routes
 // ==============================================================================
 

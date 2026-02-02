@@ -26,7 +26,8 @@ const AVAILABLE_MODULES = [
   'telegram',
   'branding',
   'email',
-  'webhook'
+  'webhook',
+  'files'
 ];
 
 // ==============================================================================

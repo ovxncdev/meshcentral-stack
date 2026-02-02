@@ -1,411 +1,413 @@
 /**
- * File Hosting Module
+ * Files Module
  * 
- * Host files and generate direct download links:
- *   - Upload files via admin dashboard
- *   - Generate direct download URLs
- *   - Manage hosted files
- *   - Track download statistics
+ * Handles file hosting with per-user ownership.
+ * Users can only see/manage their own files.
+ * Admins can see/manage all files.
  * 
- * Files are served at:
- *   /downloads/{filename}
+ * Features:
+ * - Per-user file ownership
+ * - Public/private file visibility
+ * - Download tracking
+ * - File expiration (optional)
  */
 
+const path = require('path');
 const fs = require('fs').promises;
 const fsSync = require('fs');
-const path = require('path');
 const crypto = require('crypto');
-const BaseModule = require('./base');
 
-// ==============================================================================
-// FilesModule Class
-// ==============================================================================
-
-class FilesModule extends BaseModule {
-  name = 'files';
-  displayName = 'File Hosting';
-  description = 'Host files and generate direct download links';
-  icon = 'folder';
-  
-  /**
-   * Get default settings
-   */
-  getDefaultSettings() {
-    return {
-      enabled: true,
-      
-      // Storage settings
-      maxFileSize: 100, // MB
-      allowedExtensions: '.exe,.msi,.zip,.dmg,.pkg,.sh,.bat,.ps1,.pdf,.doc,.docx',
-      
-      // Files list (stored as JSON)
-      files: []
-    };
-  }
-  
-  /**
-   * Get settings schema for UI
-   */
-  getSchema() {
-    return [
-      {
-        key: 'enabled',
-        type: 'boolean',
-        label: 'Enable File Hosting',
-        description: 'Allow hosting files for direct download'
-      },
-      
-      // Settings Section
-      {
-        key: 'section_settings',
-        type: 'section',
-        label: 'Upload Settings'
-      },
-      {
-        key: 'maxFileSize',
-        type: 'number',
-        label: 'Max File Size (MB)',
-        description: 'Maximum file size allowed for upload',
-        placeholder: '100',
-        dependsOn: 'enabled',
-        validation: {
-          min: 1,
-          max: 1000
-        }
-      },
-      {
-        key: 'allowedExtensions',
-        type: 'text',
-        label: 'Allowed Extensions',
-        description: 'Comma-separated list of allowed file extensions',
-        placeholder: '.exe,.msi,.zip,.dmg,.pkg',
-        dependsOn: 'enabled'
-      },
-      
-      // Files Section
-      {
-        key: 'section_files',
-        type: 'section',
-        label: 'Hosted Files'
-      },
-      {
-        key: 'files',
-        type: 'filelist',
-        label: 'Uploaded Files',
-        description: 'Files available for download',
-        dependsOn: 'enabled'
-      }
-    ];
-  }
-  
-  /**
-   * Get available actions
-   */
-  getActions() {
-    return [
-      {
-        name: 'upload',
-        label: 'Upload File',
-        icon: 'upload',
-        description: 'Upload a new file',
-        type: 'upload'
-      },
-      {
-        name: 'refresh',
-        label: 'Refresh File List',
-        icon: 'refresh',
-        description: 'Scan directory and refresh file list'
-      },
-      {
-        name: 'cleanup',
-        label: 'Clean Up Orphans',
-        icon: 'trash',
-        description: 'Remove database entries for deleted files',
-        confirm: 'Remove entries for files that no longer exist on disk?'
-      }
-    ];
-  }
-  
-  /**
-   * Initialize module
-   */
-  async initialize() {
-    await super.initialize();
+class FilesModule {
+  constructor(configManager) {
+    this.configManager = configManager;
+    this.name = 'files';
+    this.description = 'File Hosting';
+    this.icon = 'file';
+    this.uploadsDir = process.env.UPLOADS_DIR || path.join(process.env.DATA_PATH || '/app/data', 'uploads');
     
     // Ensure uploads directory exists
-    const uploadsDir = this.getUploadsDir();
-    try {
-      await fs.mkdir(uploadsDir, { recursive: true });
-    } catch (err) {
-      if (err.code !== 'EEXIST') throw err;
-    }
-    
-    // Sync file list with actual files
-    await this.syncFileList();
+    this.ensureUploadsDir();
   }
-  
+
+  /**
+   * Ensure uploads directory exists
+   */
+  async ensureUploadsDir() {
+    try {
+      await fs.mkdir(this.uploadsDir, { recursive: true });
+    } catch (error) {
+      console.error('Failed to create uploads directory:', error);
+    }
+  }
+
   /**
    * Get uploads directory path
    */
   getUploadsDir() {
-    const dataPath = process.env.DATA_PATH || path.join(__dirname, '..', 'data');
-    return path.join(dataPath, 'uploads');
+    return this.uploadsDir;
   }
-  
+
   /**
-   * Sync file list with actual files on disk
+   * Get module schema for UI rendering
    */
-  async syncFileList() {
-    const uploadsDir = this.getUploadsDir();
-    const settings = this.getSettings();
-    let files = settings.files || [];
-    
-    try {
-      const actualFiles = await fs.readdir(uploadsDir);
-      
-      // Add any files found on disk but not in database
-      for (const filename of actualFiles) {
-        if (filename.startsWith('.')) continue; // Skip hidden files
-        
-        const exists = files.some(f => f.filename === filename);
-        if (!exists) {
-          const filepath = path.join(uploadsDir, filename);
-          const stats = await fs.stat(filepath);
-          
-          files.push({
-            id: crypto.randomUUID(),
-            filename: filename,
-            originalName: filename,
-            size: stats.size,
-            uploadedAt: stats.mtime.toISOString(),
-            downloads: 0
-          });
+  getSchema() {
+    return {
+      title: 'File Hosting',
+      description: 'Host and share files with download links',
+      type: 'object',
+      properties: {
+        enabled: {
+          type: 'boolean',
+          title: 'Enable File Hosting',
+          default: true
+        },
+        maxFileSize: {
+          type: 'number',
+          title: 'Max File Size (MB)',
+          default: 100,
+          minimum: 1,
+          maximum: 1000
+        },
+        allowedTypes: {
+          type: 'string',
+          title: 'Allowed File Types',
+          description: 'Comma-separated extensions (leave empty for all)',
+          placeholder: 'exe,msi,zip,pdf'
+        },
+        defaultExpiration: {
+          type: 'number',
+          title: 'Default Expiration (days)',
+          description: '0 = never expires',
+          default: 0,
+          minimum: 0
         }
       }
-      
-      // Mark files that no longer exist
-      for (const file of files) {
-        const filepath = path.join(uploadsDir, file.filename);
-        try {
-          await fs.access(filepath);
-          file.exists = true;
-        } catch {
-          file.exists = false;
-        }
-      }
-      
-      // Save updated list
-      await this.saveSettings({ ...settings, files });
-      
-    } catch (err) {
-      console.error('Error syncing file list:', err);
-    }
-  }
-  
-  // ==============================================================================
-  // Actions
-  // ==============================================================================
-  
-  /**
-   * Upload action - handled specially by API route
-   * This just returns upload configuration
-   */
-  async action_upload(params) {
-    const settings = this.getSettings();
-    
-    return {
-      success: true,
-      config: {
-        maxFileSize: settings.maxFileSize * 1024 * 1024, // Convert to bytes
-        allowedExtensions: settings.allowedExtensions.split(',').map(e => e.trim())
-      }
     };
   }
-  
+
   /**
-   * Refresh action - rescan directory
+   * Get global settings
    */
-  async action_refresh(params) {
-    await this.syncFileList();
-    
+  async getSettings() {
+    const settings = await this.configManager.get('files') || {};
     return {
-      success: true,
-      message: 'File list refreshed',
-      settings: this.getSettings()
+      enabled: settings.enabled !== false,
+      maxFileSize: settings.maxFileSize || 100,
+      allowedTypes: settings.allowedTypes || '',
+      defaultExpiration: settings.defaultExpiration || 0
     };
   }
-  
+
   /**
-   * Cleanup action - remove orphan entries
+   * Save global settings (admin only)
    */
-  async action_cleanup(params) {
-    const settings = this.getSettings();
-    const files = settings.files || [];
-    
-    const validFiles = files.filter(f => f.exists !== false);
-    const removed = files.length - validFiles.length;
-    
-    await this.saveSettings({ ...settings, files: validFiles });
-    
-    return {
-      success: true,
-      message: `Removed ${removed} orphan entries`,
-      settings: this.getSettings()
+  async saveSettings(data) {
+    const current = await this.configManager.get('files') || {};
+    const updated = {
+      ...current,
+      enabled: data.enabled !== false,
+      maxFileSize: parseInt(data.maxFileSize) || 100,
+      allowedTypes: (data.allowedTypes || '').trim(),
+      defaultExpiration: parseInt(data.defaultExpiration) || 0,
+      updatedAt: new Date().toISOString()
     };
+    await this.configManager.set('files', updated);
+    return { success: true };
   }
-  
-  // ==============================================================================
-  // File Operations
-  // ==============================================================================
-  
+
+  /**
+   * Get all files (admin only)
+   */
+  async getAllFiles() {
+    const data = await this.configManager.get('files') || {};
+    const files = data.items || [];
+    return files.map(f => ({
+      ...f,
+      downloadUrl: this.getDownloadUrl(f)
+    }));
+  }
+
+  /**
+   * Get files for a specific user
+   */
+  async getUserFiles(userId) {
+    const data = await this.configManager.get('files') || {};
+    const files = data.items || [];
+    
+    // Return files owned by user OR public files
+    const userFiles = files.filter(f => 
+      f.ownerId === userId || f.isPublic === true
+    );
+    
+    return userFiles.map(f => ({
+      ...f,
+      downloadUrl: this.getDownloadUrl(f),
+      isOwner: f.ownerId === userId
+    }));
+  }
+
+  /**
+   * Get file by ID
+   */
+  async getFileById(fileId) {
+    const data = await this.configManager.get('files') || {};
+    const files = data.items || [];
+    return files.find(f => f.id === fileId);
+  }
+
+  /**
+   * Get file by filename
+   */
+  getFileByName(filename) {
+    const data = this.configManager.getSync('files') || {};
+    const files = data.items || [];
+    return files.find(f => f.filename === filename);
+  }
+
+  /**
+   * Get download URL for a file
+   */
+  getDownloadUrl(file, baseUrl = '') {
+    if (!file) return null;
+    return `${baseUrl}/downloads/${encodeURIComponent(file.filename)}`;
+  }
+
   /**
    * Handle file upload
-   * @param {object} fileData - File data from multer
-   * @param {string} customName - Optional custom filename
-   * @returns {object} File info
    */
-  async handleUpload(fileData, customName) {
-    const settings = this.getSettings();
+  async handleUpload(fileData, customName, user) {
+    const settings = await this.getSettings();
     
     if (!settings.enabled) {
       throw new Error('File hosting is disabled');
     }
-    
-    // Validate file size
-    const maxSize = settings.maxFileSize * 1024 * 1024;
-    if (fileData.size > maxSize) {
+
+    // Check file size
+    const maxBytes = settings.maxFileSize * 1024 * 1024;
+    if (fileData.size > maxBytes) {
       throw new Error(`File too large. Maximum size is ${settings.maxFileSize}MB`);
     }
-    
-    // Validate extension
-    const ext = path.extname(fileData.originalname).toLowerCase();
-    const allowedExts = settings.allowedExtensions.split(',').map(e => e.trim().toLowerCase());
-    if (allowedExts.length > 0 && allowedExts[0] !== '' && !allowedExts.includes(ext)) {
-      throw new Error(`File type not allowed. Allowed: ${settings.allowedExtensions}`);
+
+    // Check file type
+    if (settings.allowedTypes) {
+      const allowedExts = settings.allowedTypes.split(',').map(e => e.trim().toLowerCase());
+      const fileExt = path.extname(fileData.originalname).toLowerCase().replace('.', '');
+      if (!allowedExts.includes(fileExt)) {
+        throw new Error(`File type not allowed. Allowed types: ${settings.allowedTypes}`);
+      }
     }
-    
-    // Generate safe filename
-    const safeOriginal = fileData.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
-    const filename = customName ? 
-      customName.replace(/[^a-zA-Z0-9._-]/g, '_') : 
-      safeOriginal;
-    
-    // Ensure unique filename
-    const uploadsDir = this.getUploadsDir();
-    let finalFilename = filename;
-    let counter = 1;
-    
-    while (fsSync.existsSync(path.join(uploadsDir, finalFilename))) {
-      const namePart = path.basename(filename, ext);
-      finalFilename = `${namePart}_${counter}${ext}`;
-      counter++;
+
+    // Generate unique filename
+    const fileId = crypto.randomUUID();
+    const ext = path.extname(fileData.originalname);
+    const safeName = customName 
+      ? customName.replace(/[^a-zA-Z0-9.-]/g, '_') + ext
+      : fileData.originalname.replace(/[^a-zA-Z0-9.-]/g, '_');
+    const finalFilename = `${fileId}_${safeName}`;
+
+    // Ensure uploads directory exists
+    await this.ensureUploadsDir();
+
+    // Move file to uploads directory (use copy+delete for cross-device support)
+    const destPath = path.join(this.uploadsDir, finalFilename);
+    await fs.copyFile(fileData.path, destPath);
+    await fs.unlink(fileData.path).catch(() => {}); // Clean up temp file
+
+    // Calculate expiration
+    let expiresAt = null;
+    if (settings.defaultExpiration > 0) {
+      expiresAt = new Date();
+      expiresAt.setDate(expiresAt.getDate() + settings.defaultExpiration);
+      expiresAt = expiresAt.toISOString();
     }
-    
-    // Move file to uploads directory
-    const destPath = path.join(uploadsDir, finalFilename);
-    await fs.rename(fileData.path, destPath);
-    
+
     // Create file record
     const fileRecord = {
-      id: crypto.randomUUID(),
+      id: fileId,
       filename: finalFilename,
-      originalName: fileData.originalname,
-      size: fileData.size,
+      originalName: customName || fileData.originalname,
       mimeType: fileData.mimetype,
-      uploadedAt: new Date().toISOString(),
+      size: fileData.size,
+      ownerId: user?.id || 'anonymous',
+      ownerName: user?.name || 'Anonymous',
+      isPublic: false,
       downloads: 0,
-      exists: true
+      uploadedAt: new Date().toISOString(),
+      expiresAt
     };
-    
-    // Add to files list
-    const files = settings.files || [];
-    files.push(fileRecord);
-    await this.saveSettings({ ...settings, files });
-    
+
+    // Save to config
+    const data = await this.configManager.get('files') || {};
+    if (!data.items) data.items = [];
+    data.items.push(fileRecord);
+    await this.configManager.set('files', data);
+
     return fileRecord;
   }
-  
+
   /**
-   * Delete a file
-   * @param {string} fileId - File ID
+   * Update file properties
    */
-  async deleteFile(fileId) {
-    const settings = this.getSettings();
-    const files = settings.files || [];
-    
-    const fileIndex = files.findIndex(f => f.id === fileId);
-    if (fileIndex === -1) {
+  async updateFile(fileId, updates, user) {
+    const data = await this.configManager.get('files') || {};
+    const files = data.items || [];
+    const index = files.findIndex(f => f.id === fileId);
+
+    if (index === -1) {
       throw new Error('File not found');
     }
-    
-    const file = files[fileIndex];
-    
-    // Delete from disk
-    const filepath = path.join(this.getUploadsDir(), file.filename);
-    try {
-      await fs.unlink(filepath);
-    } catch (err) {
-      if (err.code !== 'ENOENT') throw err;
+
+    const file = files[index];
+
+    // Check ownership (unless admin)
+    if (!user?.isAdmin && file.ownerId !== user?.id) {
+      throw new Error('Access denied');
     }
-    
-    // Remove from list
-    files.splice(fileIndex, 1);
-    await this.saveSettings({ ...settings, files });
-    
-    return { success: true, message: 'File deleted' };
+
+    // Update allowed fields
+    const allowedUpdates = ['originalName', 'isPublic', 'expiresAt'];
+    for (const key of allowedUpdates) {
+      if (updates[key] !== undefined) {
+        files[index][key] = updates[key];
+      }
+    }
+    files[index].updatedAt = new Date().toISOString();
+
+    data.items = files;
+    await this.configManager.set('files', data);
+
+    return files[index];
   }
-  
+
   /**
-   * Get file by ID
-   * @param {string} fileId - File ID
+   * Delete a file
    */
-  getFile(fileId) {
-    const settings = this.getSettings();
-    const files = settings.files || [];
-    return files.find(f => f.id === fileId);
+  async deleteFile(fileId, user) {
+    const data = await this.configManager.get('files') || {};
+    const files = data.items || [];
+    const index = files.findIndex(f => f.id === fileId);
+
+    if (index === -1) {
+      return { success: false, error: 'File not found' };
+    }
+
+    const file = files[index];
+
+    // Check ownership (unless admin)
+    if (user && !user.isAdmin && file.ownerId !== user.id) {
+      return { success: false, error: 'Access denied' };
+    }
+
+    // Delete physical file
+    try {
+      const filePath = path.join(this.uploadsDir, file.filename);
+      await fs.unlink(filePath);
+    } catch (error) {
+      console.error('Failed to delete physical file:', error.message);
+    }
+
+    // Remove from config
+    data.items = files.filter(f => f.id !== fileId);
+    await this.configManager.set('files', data);
+
+    return { success: true };
   }
-  
+
   /**
-   * Get file by filename
-   * @param {string} filename - Filename
-   */
-  getFileByName(filename) {
-    const settings = this.getSettings();
-    const files = settings.files || [];
-    return files.find(f => f.filename === filename);
-  }
-  
-  /**
-   * Increment download count
-   * @param {string} fileId - File ID
+   * Increment download counter
    */
   async incrementDownloads(fileId) {
-    const settings = this.getSettings();
-    const files = settings.files || [];
-    
-    const file = files.find(f => f.id === fileId);
-    if (file) {
-      file.downloads = (file.downloads || 0) + 1;
-      file.lastDownload = new Date().toISOString();
-      await this.saveSettings({ ...settings, files });
+    const data = await this.configManager.get('files') || {};
+    const files = data.items || [];
+    const index = files.findIndex(f => f.id === fileId);
+
+    if (index !== -1) {
+      files[index].downloads = (files[index].downloads || 0) + 1;
+      files[index].lastDownloadAt = new Date().toISOString();
+      data.items = files;
+      await this.configManager.set('files', data);
     }
   }
-  
+
   /**
-   * Get all files
+   * Clean up expired files
    */
-  getFiles() {
-    const settings = this.getSettings();
-    return settings.files || [];
+  async cleanupExpired() {
+    const data = await this.configManager.get('files') || {};
+    const files = data.items || [];
+    const now = new Date();
+    let cleaned = 0;
+
+    const remaining = [];
+    for (const file of files) {
+      if (file.expiresAt && new Date(file.expiresAt) < now) {
+        // Delete physical file
+        try {
+          const filePath = path.join(this.uploadsDir, file.filename);
+          await fs.unlink(filePath);
+          cleaned++;
+        } catch (error) {
+          console.error('Failed to delete expired file:', error.message);
+        }
+      } else {
+        remaining.push(file);
+      }
+    }
+
+    if (cleaned > 0) {
+      data.items = remaining;
+      await this.configManager.set('files', data);
+    }
+
+    return { cleaned };
   }
-  
+
   /**
-   * Get download URL for a file
-   * @param {object} file - File record
-   * @param {string} baseUrl - Base URL of the server
+   * Execute module actions
    */
-  getDownloadUrl(file, baseUrl = '') {
-    return `${baseUrl}/downloads/${encodeURIComponent(file.filename)}`;
+  async executeAction(action, data, user) {
+    switch (action) {
+      case 'upload':
+        return this.handleUpload(data.file, data.customName, user);
+      
+      case 'cleanup':
+        if (!user?.isAdmin) {
+          throw new Error('Admin access required');
+        }
+        return this.cleanupExpired();
+      
+      default:
+        throw new Error(`Unknown action: ${action}`);
+    }
+  }
+
+  /**
+   * Get storage stats (admin only)
+   */
+  async getStats() {
+    const data = await this.configManager.get('files') || {};
+    const files = data.items || [];
+    
+    const totalSize = files.reduce((sum, f) => sum + (f.size || 0), 0);
+    const totalDownloads = files.reduce((sum, f) => sum + (f.downloads || 0), 0);
+    
+    // Group by owner
+    const byOwner = {};
+    for (const file of files) {
+      const ownerId = file.ownerId || 'anonymous';
+      if (!byOwner[ownerId]) {
+        byOwner[ownerId] = { count: 0, size: 0 };
+      }
+      byOwner[ownerId].count++;
+      byOwner[ownerId].size += file.size || 0;
+    }
+
+    return {
+      totalFiles: files.length,
+      totalSize,
+      totalDownloads,
+      byOwner
+    };
   }
 }
 

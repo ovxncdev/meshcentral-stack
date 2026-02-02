@@ -58,8 +58,9 @@ services:
       - ${CONFIG_PATH:-./config}/meshcentral/config.json:/opt/meshcentral/meshcentral-data/config.json:ro
       
       # SSL certificate - shared with nginx so agent cert hash matches
-      - ${SSL_CERT_PATH:-./data/ssl}/cert.pem:/opt/meshcentral/meshcentral-data/webserver-cert-public.crt:ro
-      - ${SSL_CERT_PATH:-./data/ssl}/key.pem:/opt/meshcentral/meshcentral-data/webserver-cert-private.key:ro
+      # Note: NOT mounted as read-only so MeshCentral can update certs when domain changes
+      - ${SSL_CERT_PATH:-./data/ssl}/cert.pem:/opt/meshcentral/meshcentral-data/webserver-cert-public.crt
+      - ${SSL_CERT_PATH:-./data/ssl}/key.pem:/opt/meshcentral/meshcentral-data/webserver-cert-private.key
     
     networks:
       - internal

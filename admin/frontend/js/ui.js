@@ -6,11 +6,14 @@
  * - Toast notifications
  * - Modal dialogs
  * - Loading states
+ * - File Manager
+ * 
+ * Works in Docker and non-Docker environments with graceful fallbacks.
  */
 
 const UI = (function() {
   // ==============================================================================
-  // SVG Icon Mapping
+  // SVG Icon Mapping (Single Source of Truth)
   // ==============================================================================
   
   const ICONS = {
@@ -50,14 +53,14 @@ const UI = (function() {
     'chevron-right': '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>',
     'external-link': '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>',
     
-    // Default
+    // Default fallback
     'default': '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path></svg>'
   };
   
   /**
-   * Get icon for a given name
+   * Get icon SVG by name with fallback
    * @param {string} name - Icon name
-   * @returns {string} SVG icon
+   * @returns {string} SVG string
    */
   function getIcon(name) {
     return ICONS[name] || ICONS['default'];
@@ -75,11 +78,15 @@ const UI = (function() {
    */
   function toast(message, type = 'info', duration = 4000) {
     const container = document.getElementById('toastContainer');
-    if (!container) return;
+    if (!container) {
+      // Fallback to console if no toast container
+      console.log(`[${type.toUpperCase()}] ${message}`);
+      return null;
+    }
     
-    const toast = document.createElement('div');
-    toast.className = `toast ${type}`;
-    toast.innerHTML = `
+    const toastEl = document.createElement('div');
+    toastEl.className = `toast ${type}`;
+    toastEl.innerHTML = `
       <span class="toast-icon">${getIcon(type)}</span>
       <div class="toast-content">
         <span class="toast-message">${escapeHtml(message)}</span>
@@ -87,22 +94,20 @@ const UI = (function() {
       <button class="toast-close" onclick="this.parentElement.remove()">×</button>
     `;
     
-    container.appendChild(toast);
+    container.appendChild(toastEl);
     
     if (duration > 0) {
       setTimeout(() => {
-        toast.style.opacity = '0';
-        toast.style.transform = 'translateX(20px)';
-        setTimeout(() => toast.remove(), 300);
+        toastEl.style.opacity = '0';
+        toastEl.style.transform = 'translateX(20px)';
+        setTimeout(() => toastEl.remove(), 300);
       }, duration);
     }
     
-    return toast;
+    return toastEl;
   }
   
-  /**
-   * Toast shortcuts
-   */
+  // Toast shortcuts
   const showSuccess = (msg) => toast(msg, 'success');
   const showError = (msg) => toast(msg, 'error', 6000);
   const showWarning = (msg) => toast(msg, 'warning');
@@ -113,7 +118,7 @@ const UI = (function() {
   // ==============================================================================
   
   /**
-   * Show confirmation dialog
+   * Show confirmation dialog with fallback
    * @param {string} message - Message to display
    * @param {string} title - Dialog title
    * @returns {Promise<boolean>} User's choice
@@ -126,7 +131,8 @@ const UI = (function() {
       const okBtn = document.getElementById('confirmOk');
       const cancelBtn = document.getElementById('confirmCancel');
       
-      if (!modal) {
+      // Fallback to native confirm if modal elements don't exist
+      if (!modal || !titleEl || !messageEl || !okBtn || !cancelBtn) {
         resolve(window.confirm(message));
         return;
       }
@@ -160,10 +166,17 @@ const UI = (function() {
    * @returns {string} Form HTML
    */
   function generateForm(schema, values = {}) {
+    if (!Array.isArray(schema)) {
+      console.warn('generateForm: schema is not an array', schema);
+      return '<p class="text-muted">No schema available</p>';
+    }
+    
     let html = '';
     let currentSection = null;
     
     for (const field of schema) {
+      if (!field || !field.type) continue;
+      
       // Handle sections
       if (field.type === 'section') {
         if (currentSection) {
@@ -171,7 +184,7 @@ const UI = (function() {
         }
         html += `
           <div class="form-section">
-            <h3 class="form-section-title">${escapeHtml(field.label)}</h3>
+            <h3 class="form-section-title">${escapeHtml(field.label || '')}</h3>
         `;
         currentSection = field.key;
         continue;
@@ -235,7 +248,7 @@ const UI = (function() {
               <span class="toggle-slider"></span>
             </label>
             <div>
-              <span class="toggle-label">${escapeHtml(label)}</span>
+              <span class="toggle-label">${escapeHtml(label || '')}</span>
               ${description ? `<p class="form-description">${escapeHtml(description)}</p>` : ''}
             </div>
           </div>
@@ -244,7 +257,7 @@ const UI = (function() {
         
       case 'select':
         html += `
-          <label class="form-label">${escapeHtml(label)}${required ? ' *' : ''}</label>
+          <label class="form-label">${escapeHtml(label || '')}${required ? ' *' : ''}</label>
           ${description ? `<p class="form-description">${escapeHtml(description)}</p>` : ''}
           <select class="form-select" name="${key}" ${required ? 'required' : ''}>
             ${(options || []).map(opt => `
@@ -258,7 +271,7 @@ const UI = (function() {
         
       case 'textarea':
         html += `
-          <label class="form-label">${escapeHtml(label)}${required ? ' *' : ''}</label>
+          <label class="form-label">${escapeHtml(label || '')}${required ? ' *' : ''}</label>
           ${description ? `<p class="form-description">${escapeHtml(description)}</p>` : ''}
           <textarea 
             class="form-textarea" 
@@ -271,7 +284,7 @@ const UI = (function() {
         
       case 'password':
         html += `
-          <label class="form-label">${escapeHtml(label)}${required ? ' *' : ''}</label>
+          <label class="form-label">${escapeHtml(label || '')}${required ? ' *' : ''}</label>
           ${description ? `<p class="form-description">${escapeHtml(description)}</p>` : ''}
           <input 
             type="password" 
@@ -287,7 +300,7 @@ const UI = (function() {
         
       case 'number':
         html += `
-          <label class="form-label">${escapeHtml(label)}${required ? ' *' : ''}</label>
+          <label class="form-label">${escapeHtml(label || '')}${required ? ' *' : ''}</label>
           ${description ? `<p class="form-description">${escapeHtml(description)}</p>` : ''}
           <input 
             type="number" 
@@ -304,11 +317,11 @@ const UI = (function() {
         
       case 'color':
         html += `
-          <label class="form-label">${escapeHtml(label)}${required ? ' *' : ''}</label>
+          <label class="form-label">${escapeHtml(label || '')}${required ? ' *' : ''}</label>
           ${description ? `<p class="form-description">${escapeHtml(description)}</p>` : ''}
           <input 
             type="color" 
-            class="form-input" 
+            class="form-input form-color" 
             name="${key}" 
             value="${escapeHtml(value || '#000000')}"
           >
@@ -317,7 +330,7 @@ const UI = (function() {
         
       case 'time':
         html += `
-          <label class="form-label">${escapeHtml(label)}${required ? ' *' : ''}</label>
+          <label class="form-label">${escapeHtml(label || '')}${required ? ' *' : ''}</label>
           ${description ? `<p class="form-description">${escapeHtml(description)}</p>` : ''}
           <input 
             type="time" 
@@ -331,7 +344,7 @@ const UI = (function() {
         
       case 'readonly':
         html += `
-          <label class="form-label">${escapeHtml(label)}</label>
+          <label class="form-label">${escapeHtml(label || '')}</label>
           ${description ? `<p class="form-description">${escapeHtml(description)}</p>` : ''}
           <input 
             type="text" 
@@ -345,7 +358,7 @@ const UI = (function() {
       
       case 'filelist':
         html += `
-          <label class="form-label">${escapeHtml(label)}</label>
+          <label class="form-label">${escapeHtml(label || '')}</label>
           ${description ? `<p class="form-description">${escapeHtml(description)}</p>` : ''}
           <div class="file-list-container" id="fileListContainer">
             <div class="file-upload-area" id="fileUploadArea">
@@ -367,13 +380,17 @@ const UI = (function() {
           </div>
         `;
         // Initialize file list after DOM is ready
-        setTimeout(() => FileManager.init(), 100);
+        setTimeout(() => {
+          if (typeof FileManager !== 'undefined' && FileManager.init) {
+            FileManager.init();
+          }
+        }, 100);
         break;
         
       case 'text':
       default:
         html += `
-          <label class="form-label">${escapeHtml(label)}${required ? ' *' : ''}</label>
+          <label class="form-label">${escapeHtml(label || '')}${required ? ' *' : ''}</label>
           ${description ? `<p class="form-description">${escapeHtml(description)}</p>` : ''}
           <input 
             type="text" 
@@ -398,6 +415,8 @@ const UI = (function() {
    * @returns {object} Form values
    */
   function getFormValues(form, schema = []) {
+    if (!form) return {};
+    
     const formData = new FormData(form);
     const values = {};
     
@@ -438,6 +457,8 @@ const UI = (function() {
    * @param {HTMLFormElement} form - Form element
    */
   function setupDependencies(form) {
+    if (!form) return;
+    
     const updateVisibility = () => {
       const groups = form.querySelectorAll('[data-depends-on]');
       
@@ -483,7 +504,8 @@ const UI = (function() {
         ${action.confirm ? `data-confirm="${escapeHtml(action.confirm)}"` : ''}
         title="${escapeHtml(action.description || '')}"
       >
-        ${getIcon(action.icon)} ${escapeHtml(action.label)}
+        ${getIcon(action.icon || 'play')}
+        <span>${escapeHtml(action.label)}</span>
       </button>
     `).join('');
   }
@@ -500,11 +522,11 @@ const UI = (function() {
   function generateModuleCard(module) {
     return `
       <div class="module-card" data-module="${module.name}">
-        <div class="module-card-header">
-          <span class="module-card-icon">${getIcon(module.icon)}</span>
-          <span class="module-card-title">${escapeHtml(module.displayName)}</span>
+        <div class="module-card-icon">${getIcon(module.icon || 'default')}</div>
+        <div class="module-card-content">
+          <h3 class="module-card-title">${escapeHtml(module.displayName || module.name)}</h3>
+          <p class="module-card-description">${escapeHtml(module.description || '')}</p>
         </div>
-        <p class="module-card-description">${escapeHtml(module.description)}</p>
         <div class="module-card-status">
           <span class="status-dot ${module.enabled ? 'enabled' : ''}"></span>
           <span>${module.enabled ? 'Enabled' : 'Disabled'}</span>
@@ -521,8 +543,8 @@ const UI = (function() {
   function generateNavItem(module) {
     return `
       <div class="nav-item" data-module="${module.name}">
-        <span class="nav-icon">${getIcon(module.icon)}</span>
-        <span class="nav-label">${escapeHtml(module.displayName)}</span>
+        <span class="nav-icon">${getIcon(module.icon || 'default')}</span>
+        <span class="nav-label">${escapeHtml(module.displayName || module.name)}</span>
         ${module.enabled ? '<span class="nav-badge">ON</span>' : ''}
       </div>
     `;
@@ -538,6 +560,8 @@ const UI = (function() {
    * @param {boolean} loading - Loading state
    */
   function setLoading(element, loading) {
+    if (!element) return;
+    
     if (loading) {
       element.classList.add('loading');
       element.disabled = true;
@@ -626,22 +650,47 @@ const UI = (function() {
   };
 })();
 
-// Export for module systems
-if (typeof module !== 'undefined' && module.exports) {
-  module.exports = UI;
-}
-
 // ==============================================================================
-// File Manager
+// File Manager (Separate module for file hosting)
 // ==============================================================================
 
 const FileManager = (function() {
   let files = [];
+  let initialized = false;
+  
+  /**
+   * Get API base URL - works in all environments
+   * @returns {string} Base URL for API calls
+   */
+  function getApiBaseUrl() {
+    // Try to use the API module if available
+    if (typeof API !== 'undefined' && typeof API.getBaseUrl === 'function') {
+      return API.getBaseUrl();
+    }
+    
+    // Fallback: detect from current location
+    const pathname = window.location.pathname;
+    
+    // If we're in /admin-settings/, use relative path
+    if (pathname.includes('/admin-settings')) {
+      return '/admin-settings/api';
+    }
+    
+    // Default fallback
+    return '/api';
+  }
   
   /**
    * Initialize file manager
    */
   async function init() {
+    if (initialized) {
+      // Just reload files if already initialized
+      await loadFiles();
+      return;
+    }
+    
+    initialized = true;
     await loadFiles();
     setupDragDrop();
   }
@@ -650,22 +699,37 @@ const FileManager = (function() {
    * Load files from API
    */
   async function loadFiles() {
+    const fileList = document.getElementById('fileList');
+    
     try {
-      const response = await fetch(API.getBaseUrl() + '/files');
+      const response = await fetch(getApiBaseUrl() + '/files');
+      
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      
       const data = await response.json();
       
       if (data.success) {
         files = data.files || [];
         renderFileList();
       } else {
-        showError('Failed to load files');
+        showFileListError(data.error || 'Failed to load files');
       }
     } catch (error) {
       console.error('Failed to load files:', error);
-      const fileList = document.getElementById('fileList');
-      if (fileList) {
-        fileList.innerHTML = '<p class="text-muted">Failed to load files</p>';
-      }
+      showFileListError('Failed to load files: ' + error.message);
+    }
+  }
+  
+  /**
+   * Show error in file list
+   * @param {string} message - Error message
+   */
+  function showFileListError(message) {
+    const fileList = document.getElementById('fileList');
+    if (fileList) {
+      fileList.innerHTML = `<p class="text-error">${UI.escapeHtml(message)}</p>`;
     }
   }
   
@@ -720,7 +784,7 @@ const FileManager = (function() {
   }
   
   /**
-   * Setup drag and drop
+   * Setup drag and drop handlers
    */
   function setupDragDrop() {
     const dropzone = document.getElementById('uploadDropzone');
@@ -728,27 +792,40 @@ const FileManager = (function() {
     
     if (!dropzone || !fileInput) return;
     
-    dropzone.addEventListener('dragover', (e) => {
+    // Prevent default drag behaviors
+    ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+      dropzone.addEventListener(eventName, preventDefaults, false);
+      document.body.addEventListener(eventName, preventDefaults, false);
+    });
+    
+    function preventDefaults(e) {
       e.preventDefault();
-      dropzone.classList.add('dragover');
+      e.stopPropagation();
+    }
+    
+    // Highlight on drag
+    ['dragenter', 'dragover'].forEach(eventName => {
+      dropzone.addEventListener(eventName, () => dropzone.classList.add('dragover'), false);
     });
     
-    dropzone.addEventListener('dragleave', () => {
-      dropzone.classList.remove('dragover');
+    ['dragleave', 'drop'].forEach(eventName => {
+      dropzone.addEventListener(eventName, () => dropzone.classList.remove('dragover'), false);
     });
     
+    // Handle drop
     dropzone.addEventListener('drop', (e) => {
-      e.preventDefault();
-      dropzone.classList.remove('dragover');
+      const dt = e.dataTransfer;
+      const droppedFiles = dt.files;
       
-      if (e.dataTransfer.files.length > 0) {
-        fileInput.files = e.dataTransfer.files;
+      if (droppedFiles.length > 0) {
+        fileInput.files = droppedFiles;
         uploadFile();
       }
-    });
+    }, false);
     
+    // Handle file input change
     fileInput.addEventListener('change', () => {
-      if (fileInput.files.length > 0) {
+      if (fileInput.files && fileInput.files.length > 0) {
         uploadFile();
       }
     });
@@ -759,7 +836,7 @@ const FileManager = (function() {
    */
   async function uploadFile() {
     const fileInput = document.getElementById('fileInput');
-    const customName = document.getElementById('customFileName');
+    const customNameInput = document.getElementById('customFileName');
     const uploadBtn = document.getElementById('uploadBtn');
     
     if (!fileInput || !fileInput.files || fileInput.files.length === 0) {
@@ -768,20 +845,23 @@ const FileManager = (function() {
     }
     
     const file = fileInput.files[0];
+    const customName = customNameInput ? customNameInput.value.trim() : '';
+    
+    // Create FormData
     const formData = new FormData();
     formData.append('file', file);
-    
-    if (customName && customName.value.trim()) {
-      formData.append('customName', customName.value.trim());
+    if (customName) {
+      formData.append('customName', customName);
     }
     
     try {
+      // Show loading state
       if (uploadBtn) {
         uploadBtn.disabled = true;
-        uploadBtn.textContent = 'Uploading...';
+        uploadBtn.innerHTML = 'Uploading...';
       }
       
-      const response = await fetch(API.getBaseUrl() + '/files/upload', {
+      const response = await fetch(getApiBaseUrl() + '/files/upload', {
         method: 'POST',
         body: formData
       });
@@ -790,8 +870,12 @@ const FileManager = (function() {
       
       if (data.success) {
         UI.showSuccess('File uploaded successfully');
+        
+        // Reset form
         fileInput.value = '';
-        if (customName) customName.value = '';
+        if (customNameInput) customNameInput.value = '';
+        
+        // Reload file list
         await loadFiles();
       } else {
         UI.showError(data.error || 'Upload failed');
@@ -800,6 +884,7 @@ const FileManager = (function() {
       console.error('Upload error:', error);
       UI.showError('Upload failed: ' + error.message);
     } finally {
+      // Reset button
       if (uploadBtn) {
         uploadBtn.disabled = false;
         uploadBtn.innerHTML = UI.getIcon('upload') + ' Upload';
@@ -809,13 +894,14 @@ const FileManager = (function() {
   
   /**
    * Delete a file
+   * @param {string} fileId - File ID to delete
    */
   async function deleteFile(fileId) {
     const confirmed = await UI.confirm('Are you sure you want to delete this file?', 'Delete File');
     if (!confirmed) return;
     
     try {
-      const response = await fetch(API.getBaseUrl() + '/files/' + fileId, {
+      const response = await fetch(getApiBaseUrl() + '/files/' + fileId, {
         method: 'DELETE'
       });
       
@@ -834,50 +920,76 @@ const FileManager = (function() {
   }
   
   /**
-   * Copy URL to clipboard
+   * Copy URL to clipboard with fallback
+   * @param {string} url - URL to copy
    */
   async function copyUrl(url) {
     try {
-      await navigator.clipboard.writeText(url);
-      UI.showSuccess('URL copied to clipboard');
+      // Modern API
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(url);
+        UI.showSuccess('URL copied to clipboard');
+        return;
+      }
+      
+      // Fallback for older browsers and non-HTTPS
+      const textArea = document.createElement('textarea');
+      textArea.value = url;
+      textArea.style.position = 'fixed';
+      textArea.style.left = '-999999px';
+      textArea.style.top = '-999999px';
+      document.body.appendChild(textArea);
+      textArea.focus();
+      textArea.select();
+      
+      const successful = document.execCommand('copy');
+      document.body.removeChild(textArea);
+      
+      if (successful) {
+        UI.showSuccess('URL copied to clipboard');
+      } else {
+        throw new Error('execCommand failed');
+      }
     } catch (error) {
-      // Fallback for older browsers
-      const input = document.createElement('input');
-      input.value = url;
-      document.body.appendChild(input);
-      input.select();
-      document.execCommand('copy');
-      document.body.removeChild(input);
-      UI.showSuccess('URL copied to clipboard');
+      console.error('Copy failed:', error);
+      // Final fallback - show the URL in a prompt
+      window.prompt('Copy this URL:', url);
     }
   }
   
   /**
-   * Format file size
+   * Format file size for display
+   * @param {number} bytes - Size in bytes
+   * @returns {string} Formatted size
    */
   function formatFileSize(bytes) {
     if (!bytes || bytes === 0) return '0 B';
+    
     const k = 1024;
-    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
+    
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   }
   
-  /**
-   * Show error helper
-   */
-  function showError(msg) {
-    const fileList = document.getElementById('fileList');
-    if (fileList) {
-      fileList.innerHTML = `<p class="text-error">${UI.escapeHtml(msg)}</p>`;
-    }
-  }
+  // ==============================================================================
+  // Public API
+  // ==============================================================================
   
   return {
     init,
     loadFiles,
     uploadFile,
     deleteFile,
-    copyUrl
+    copyUrl,
+    formatFileSize
   };
 })();
+
+// ==============================================================================
+// Export for module systems (Node.js compatibility)
+// ==============================================================================
+
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = { UI, FileManager };
+}

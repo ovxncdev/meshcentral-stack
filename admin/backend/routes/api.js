@@ -16,10 +16,18 @@
  *   PUT  /api/settings             - Update global settings
  *   
  *   GET  /api/health               - Health check
+ *   
+ *   POST /api/files/upload         - Upload a file
+ *   DELETE /api/files/:id          - Delete a file
+ *   GET  /api/files                - List all files
  */
 
 const express = require('express');
 const router = express.Router();
+const path = require('path');
+const fs = require('fs');
+const os = require('os');
+const crypto = require('crypto');
 
 // ==============================================================================
 // Middleware
@@ -460,6 +468,208 @@ router.get('/branding', (req, res) => {
       success: true,
       branding
     });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// ==============================================================================
+// File Hosting Routes
+// ==============================================================================
+
+/**
+ * GET /api/files
+ * List all hosted files
+ */
+router.get('/files', (req, res) => {
+  try {
+    const moduleLoader = req.app.locals.moduleLoader;
+    
+    if (!moduleLoader.has('files')) {
+      return res.status(503).json({
+        success: false,
+        error: 'File hosting module not available'
+      });
+    }
+    
+    const filesModule = moduleLoader.get('files');
+    const files = filesModule.getFiles();
+    
+    // Add download URLs
+    const baseUrl = `${req.protocol}://${req.get('host')}`;
+    const filesWithUrls = files.map(file => ({
+      ...file,
+      downloadUrl: filesModule.getDownloadUrl(file, baseUrl)
+    }));
+    
+    res.json({
+      success: true,
+      files: filesWithUrls
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+/**
+ * POST /api/files/upload
+ * Upload a new file
+ * Accepts multipart/form-data with 'file' field
+ */
+router.post('/files/upload', async (req, res) => {
+  try {
+    const moduleLoader = req.app.locals.moduleLoader;
+    
+    if (!moduleLoader.has('files')) {
+      return res.status(503).json({
+        success: false,
+        error: 'File hosting module not available'
+      });
+    }
+    
+    const filesModule = moduleLoader.get('files');
+    const settings = filesModule.getSettings();
+    
+    if (!settings.enabled) {
+      return res.status(403).json({
+        success: false,
+        error: 'File hosting is disabled'
+      });
+    }
+    
+    // Parse multipart form data manually (simple implementation)
+    const contentType = req.headers['content-type'] || '';
+    
+    if (!contentType.includes('multipart/form-data')) {
+      return res.status(400).json({
+        success: false,
+        error: 'Content-Type must be multipart/form-data'
+      });
+    }
+    
+    // Get boundary
+    const boundaryMatch = contentType.match(/boundary=(.+)$/);
+    if (!boundaryMatch) {
+      return res.status(400).json({
+        success: false,
+        error: 'No boundary found in Content-Type'
+      });
+    }
+    
+    const boundary = boundaryMatch[1];
+    const chunks = [];
+    
+    req.on('data', chunk => chunks.push(chunk));
+    req.on('end', async () => {
+      try {
+        const buffer = Buffer.concat(chunks);
+        const data = buffer.toString('binary');
+        
+        // Parse multipart data
+        const parts = data.split(`--${boundary}`);
+        let fileData = null;
+        let customName = '';
+        
+        for (const part of parts) {
+          if (part.includes('Content-Disposition')) {
+            const nameMatch = part.match(/name="([^"]+)"/);
+            const filenameMatch = part.match(/filename="([^"]+)"/);
+            
+            if (nameMatch && nameMatch[1] === 'customName') {
+              // Extract custom name value
+              const valueStart = part.indexOf('\r\n\r\n') + 4;
+              const valueEnd = part.lastIndexOf('\r\n');
+              customName = part.substring(valueStart, valueEnd).trim();
+            }
+            
+            if (filenameMatch) {
+              // This is the file
+              const contentTypeMatch = part.match(/Content-Type:\s*([^\r\n]+)/);
+              const mimeType = contentTypeMatch ? contentTypeMatch[1].trim() : 'application/octet-stream';
+              
+              // Find where the content starts (after double CRLF)
+              const contentStart = part.indexOf('\r\n\r\n') + 4;
+              const contentEnd = part.lastIndexOf('\r\n');
+              const content = Buffer.from(part.substring(contentStart, contentEnd), 'binary');
+              
+              fileData = {
+                originalname: filenameMatch[1],
+                mimetype: mimeType,
+                size: content.length,
+                buffer: content
+              };
+            }
+          }
+        }
+        
+        if (!fileData) {
+          return res.status(400).json({
+            success: false,
+            error: 'No file found in request'
+          });
+        }
+        
+        // Save file to temp location first
+        const tempPath = path.join(os.tmpdir(), `upload_${crypto.randomUUID()}`);
+        fs.writeFileSync(tempPath, fileData.buffer);
+        fileData.path = tempPath;
+        
+        // Handle upload through module
+        const file = await filesModule.handleUpload(fileData, customName);
+        
+        // Add download URL
+        const baseUrl = `${req.protocol}://${req.get('host')}`;
+        file.downloadUrl = filesModule.getDownloadUrl(file, baseUrl);
+        
+        res.json({
+          success: true,
+          message: 'File uploaded successfully',
+          file
+        });
+        
+      } catch (error) {
+        console.error('Upload processing error:', error);
+        res.status(500).json({
+          success: false,
+          error: error.message
+        });
+      }
+    });
+    
+  } catch (error) {
+    console.error('Upload error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+/**
+ * DELETE /api/files/:id
+ * Delete a hosted file
+ */
+router.delete('/files/:id', async (req, res) => {
+  try {
+    const moduleLoader = req.app.locals.moduleLoader;
+    
+    if (!moduleLoader.has('files')) {
+      return res.status(503).json({
+        success: false,
+        error: 'File hosting module not available'
+      });
+    }
+    
+    const filesModule = moduleLoader.get('files');
+    const result = await filesModule.deleteFile(req.params.id);
+    
+    res.json(result);
   } catch (error) {
     res.status(500).json({
       success: false,

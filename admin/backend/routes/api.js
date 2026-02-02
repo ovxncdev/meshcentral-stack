@@ -1,84 +1,57 @@
 /**
  * API Routes
  * 
- * RESTful API endpoints for the admin dashboard.
- * 
- * Endpoints:
- *   GET  /api/modules              - List all modules
- *   GET  /api/modules/:name        - Get module details
- *   GET  /api/modules/:name/settings - Get module settings
- *   PUT  /api/modules/:name/settings - Update module settings
- *   POST /api/modules/:name/actions/:action - Execute module action
- *   
- *   POST /api/webhook/meshcentral  - Incoming webhook from MeshCentral
- *   
- *   GET  /api/settings             - Get global settings
- *   PUT  /api/settings             - Update global settings
- *   
- *   GET  /api/health               - Health check
- *   
- *   POST /api/files/upload         - Upload a file
- *   DELETE /api/files/:id          - Delete a file
- *   GET  /api/files                - List all files
+ * Main router for all API endpoints.
+ * Handles module operations with role-based access control.
  */
 
 const express = require('express');
 const router = express.Router();
-const path = require('path');
-const fs = require('fs');
-const os = require('os');
-const crypto = require('crypto');
-
-// ==============================================================================
-// Middleware
-// ==============================================================================
-
-/**
- * Simple authentication middleware
- * In production, implement proper authentication (JWT, sessions, etc.)
- */
-const authenticate = (req, res, next) => {
-  // Skip auth for webhook endpoints
-  if (req.path.startsWith('/webhook/')) {
-    return next();
-  }
-  
-  // Skip auth for health check
-  if (req.path === '/health') {
-    return next();
-  }
-  
-  // Check for API key or session
-  const apiKey = req.headers['x-api-key'];
-  const authSecret = process.env.AUTH_SECRET;
-  
-  // If AUTH_SECRET is set, require authentication
-  if (authSecret && apiKey !== authSecret) {
-    // For now, allow all requests in development
-    // In production, uncomment the following:
-    // return res.status(401).json({ error: 'Unauthorized' });
-  }
-  
-  next();
-};
-
-router.use(authenticate);
 
 // ==============================================================================
 // Health Check
 // ==============================================================================
 
-/**
- * GET /api/health
- * Health check endpoint
- */
 router.get('/health', (req, res) => {
-  res.json({
-    status: 'ok',
+  res.json({ 
+    status: 'ok', 
     timestamp: new Date().toISOString(),
-    uptime: process.uptime()
+    authenticated: !!req.user,
+    user: req.user ? req.user.name : null
   });
 });
+
+// ==============================================================================
+// Auth Middleware Helpers
+// ==============================================================================
+
+function requireAuth(req, res, next) {
+  if (!req.user) {
+    return res.status(401).json({
+      success: false,
+      error: 'Authentication required. Please log in to MeshCentral first.',
+      loginUrl: '/'
+    });
+  }
+  next();
+}
+
+function requireAdmin(req, res, next) {
+  if (!req.user) {
+    return res.status(401).json({
+      success: false,
+      error: 'Authentication required',
+      loginUrl: '/'
+    });
+  }
+  if (!req.user.isAdmin) {
+    return res.status(403).json({
+      success: false,
+      error: 'Admin access required'
+    });
+  }
+  next();
+}
 
 // ==============================================================================
 // Module Routes
@@ -86,595 +59,544 @@ router.get('/health', (req, res) => {
 
 /**
  * GET /api/modules
- * List all loaded modules with their metadata
+ * List all available modules with their status
+ * Filters based on user role
  */
-router.get('/modules', (req, res) => {
+router.get('/modules', requireAuth, async (req, res) => {
   try {
     const moduleLoader = req.app.locals.moduleLoader;
-    const modules = moduleLoader.getModuleList();
+    const allModules = moduleLoader.getModuleList();
     
+    // Define which modules are admin-only
+    const adminOnlyModules = ['branding', 'email', 'general'];
+    
+    // Filter modules based on user role
+    const modules = allModules.filter(mod => {
+      if (adminOnlyModules.includes(mod.name)) {
+        return req.user.isAdmin;
+      }
+      return true;
+    });
+
+    // Add role info to response
     res.json({
       success: true,
-      modules
+      isAdmin: req.user.isAdmin,
+      modules: modules
     });
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
+    console.error('Error listing modules:', error);
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
 /**
  * GET /api/modules/:name
- * Get details for a specific module
+ * Get specific module info and settings
  */
-router.get('/modules/:name', (req, res) => {
+router.get('/modules/:name', requireAuth, async (req, res) => {
   try {
     const moduleLoader = req.app.locals.moduleLoader;
     const { name } = req.params;
     
-    if (!moduleLoader.has(name)) {
-      return res.status(404).json({
-        success: false,
-        error: `Module not found: ${name}`
+    // Check admin-only modules
+    const adminOnlyModules = ['branding', 'email', 'general'];
+    if (adminOnlyModules.includes(name) && !req.user.isAdmin) {
+      return res.status(403).json({ 
+        success: false, 
+        error: 'Admin access required for this module' 
       });
     }
-    
+
+    if (!moduleLoader.has(name)) {
+      return res.status(404).json({ success: false, error: 'Module not found' });
+    }
+
     const module = moduleLoader.get(name);
-    
-    res.json({
-      success: true,
-      module: {
-        name: module.name,
-        displayName: module.displayName,
-        description: module.description,
-        icon: module.icon,
-        enabled: module.isEnabled(),
-        schema: module.getSchema(),
-        actions: module.getActions(),
-        settings: module.getSettings()
-      }
-    });
+    const schema = module.getSchema ? module.getSchema() : null;
+    const settings = await module.getSettings();
+
+    // For user-specific modules, filter to user's own data
+    if (!req.user.isAdmin && module.getUserSettings) {
+      const userSettings = await module.getUserSettings(req.user.id);
+      res.json({
+        success: true,
+        name,
+        schema,
+        settings: userSettings,
+        isAdmin: false
+      });
+    } else {
+      res.json({
+        success: true,
+        name,
+        schema,
+        settings,
+        isAdmin: req.user.isAdmin
+      });
+    }
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
+    console.error(`Error getting module ${req.params.name}:`, error);
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
 /**
- * GET /api/modules/:name/settings
- * Get settings for a specific module
+ * POST /api/modules/:name
+ * Update module settings
  */
-router.get('/modules/:name/settings', (req, res) => {
+router.post('/modules/:name', requireAuth, async (req, res) => {
   try {
     const moduleLoader = req.app.locals.moduleLoader;
     const { name } = req.params;
     
-    if (!moduleLoader.has(name)) {
-      return res.status(404).json({
-        success: false,
-        error: `Module not found: ${name}`
+    // Check admin-only modules
+    const adminOnlyModules = ['branding', 'email', 'general'];
+    if (adminOnlyModules.includes(name) && !req.user.isAdmin) {
+      return res.status(403).json({ 
+        success: false, 
+        error: 'Admin access required for this module' 
       });
     }
-    
+
+    if (!moduleLoader.has(name)) {
+      return res.status(404).json({ success: false, error: 'Module not found' });
+    }
+
     const module = moduleLoader.get(name);
     
-    res.json({
-      success: true,
-      settings: module.getSettings()
-    });
+    // For user-specific modules, save under user's ID
+    if (!req.user.isAdmin && module.saveUserSettings) {
+      const result = await module.saveUserSettings(req.user.id, req.body);
+      res.json({ success: true, result });
+    } else {
+      const result = await module.saveSettings(req.body);
+      res.json({ success: true, result });
+    }
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
+    console.error(`Error saving module ${req.params.name}:`, error);
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
 /**
- * PUT /api/modules/:name/settings
- * Update settings for a specific module
+ * POST /api/modules/:name/action/:action
+ * Execute a module action
  */
-router.put('/modules/:name/settings', async (req, res) => {
-  try {
-    const moduleLoader = req.app.locals.moduleLoader;
-    const { name } = req.params;
-    const settings = req.body;
-    
-    if (!moduleLoader.has(name)) {
-      return res.status(404).json({
-        success: false,
-        error: `Module not found: ${name}`
-      });
-    }
-    
-    const module = moduleLoader.get(name);
-    
-    // Validate and save settings
-    await module.saveSettings(settings);
-    
-    res.json({
-      success: true,
-      message: 'Settings saved successfully',
-      settings: module.getSettings()
-    });
-  } catch (error) {
-    // Check for validation errors
-    if (error.validationErrors) {
-      return res.status(400).json({
-        success: false,
-        error: 'Validation failed',
-        validationErrors: error.validationErrors
-      });
-    }
-    
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
-  }
-});
-
-/**
- * POST /api/modules/:name/actions/:action
- * Execute an action on a module
- */
-router.post('/modules/:name/actions/:action', async (req, res) => {
+router.post('/modules/:name/action/:action', requireAuth, async (req, res) => {
   try {
     const moduleLoader = req.app.locals.moduleLoader;
     const { name, action } = req.params;
-    const params = req.body;
     
+    // Check admin-only modules
+    const adminOnlyModules = ['branding', 'email', 'general'];
+    if (adminOnlyModules.includes(name) && !req.user.isAdmin) {
+      return res.status(403).json({ 
+        success: false, 
+        error: 'Admin access required for this module' 
+      });
+    }
+
     if (!moduleLoader.has(name)) {
-      return res.status(404).json({
-        success: false,
-        error: `Module not found: ${name}`
-      });
+      return res.status(404).json({ success: false, error: 'Module not found' });
     }
-    
-    const result = await moduleLoader.executeAction(name, action, params);
-    
-    res.json({
-      success: true,
-      result
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
-  }
-});
 
-// ==============================================================================
-// Webhook Routes
-// ==============================================================================
+    const module = moduleLoader.get(name);
 
-/**
- * POST /api/webhook/meshcentral
- * Incoming webhook from MeshCentral
- */
-router.post('/webhook/meshcentral', async (req, res) => {
-  try {
-    const moduleLoader = req.app.locals.moduleLoader;
-    const payload = req.body;
-    const signature = req.headers['x-webhook-signature'] || req.query.secret;
-    
-    // Process with webhook module
-    if (!moduleLoader.has('webhook')) {
-      return res.status(503).json({
-        success: false,
-        error: 'Webhook module not available'
-      });
+    if (!module.executeAction) {
+      return res.status(400).json({ success: false, error: 'Module does not support actions' });
     }
-    
-    const webhookModule = moduleLoader.get('webhook');
-    const { eventType, payload: normalizedPayload } = await webhookModule.processIncoming(payload, signature);
-    
-    // Trigger event handlers in all modules
-    const results = await moduleLoader.handleWebhook(eventType, normalizedPayload);
-    
-    res.json({
-      success: true,
-      eventType,
-      results
-    });
-  } catch (error) {
-    console.error('Webhook error:', error.message);
-    res.status(400).json({
-      success: false,
-      error: error.message
-    });
-  }
-});
 
-/**
- * POST /api/webhook/test
- * Test endpoint to simulate events
- */
-router.post('/webhook/test', async (req, res) => {
-  try {
-    const moduleLoader = req.app.locals.moduleLoader;
-    const { eventType, payload } = req.body;
-    
-    if (!eventType) {
-      return res.status(400).json({
-        success: false,
-        error: 'eventType is required'
-      });
-    }
-    
-    // Add default payload values
-    const testPayload = {
-      deviceName: 'Test-Device',
-      userName: 'Test User',
-      groupName: 'Test Group',
-      ipAddress: '192.168.1.100',
-      timestamp: new Date().toISOString(),
-      ...payload
-    };
-    
-    // Trigger event handlers
-    const results = await moduleLoader.handleWebhook(eventType, testPayload);
-    
-    res.json({
-      success: true,
-      eventType,
-      payload: testPayload,
-      results
-    });
+    // Pass user info to action
+    const result = await module.executeAction(action, req.body, req.user);
+    res.json({ success: true, result });
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
+    console.error(`Error executing action ${req.params.action} on ${req.params.name}:`, error);
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
 // ==============================================================================
-// Global Settings Routes
+// Telegram Routes (User-Specific)
 // ==============================================================================
 
 /**
- * GET /api/settings
- * Get global settings
+ * GET /api/telegram/my-settings
+ * Get current user's telegram settings
  */
-router.get('/settings', (req, res) => {
-  try {
-    const configManager = req.app.locals.configManager;
-    const settings = configManager.getAll();
-    
-    // Remove internal fields
-    const { _version, _lastModified, modules, ...globalSettings } = settings;
-    
-    res.json({
-      success: true,
-      settings: globalSettings,
-      meta: {
-        version: _version,
-        lastModified: _lastModified
-      }
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
-  }
-});
-
-/**
- * PUT /api/settings
- * Update global settings
- */
-router.put('/settings', async (req, res) => {
-  try {
-    const configManager = req.app.locals.configManager;
-    const settings = req.body;
-    
-    // Update each setting
-    for (const [key, value] of Object.entries(settings)) {
-      if (key !== 'modules' && !key.startsWith('_')) {
-        await configManager.set(key, value);
-      }
-    }
-    
-    res.json({
-      success: true,
-      message: 'Settings saved successfully'
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
-  }
-});
-
-// ==============================================================================
-// Export/Import Routes
-// ==============================================================================
-
-/**
- * GET /api/export
- * Export all settings
- */
-router.get('/export', (req, res) => {
-  try {
-    const configManager = req.app.locals.configManager;
-    const data = configManager.export();
-    
-    res.setHeader('Content-Type', 'application/json');
-    res.setHeader('Content-Disposition', `attachment; filename="remote-support-settings-${Date.now()}.json"`);
-    res.send(data);
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
-  }
-});
-
-/**
- * POST /api/import
- * Import settings from JSON
- */
-router.post('/import', async (req, res) => {
-  try {
-    const configManager = req.app.locals.configManager;
-    const data = JSON.stringify(req.body);
-    
-    await configManager.import(data);
-    
-    res.json({
-      success: true,
-      message: 'Settings imported successfully'
-    });
-  } catch (error) {
-    res.status(400).json({
-      success: false,
-      error: error.message
-    });
-  }
-});
-
-// ==============================================================================
-// Branding Routes
-// ==============================================================================
-
-/**
- * GET /api/branding
- * Get branding data for support page
- * (Public endpoint - no auth required)
- */
-router.get('/branding', (req, res) => {
+router.get('/telegram/my-settings', requireAuth, async (req, res) => {
   try {
     const moduleLoader = req.app.locals.moduleLoader;
     
-    if (!moduleLoader.has('branding')) {
-      return res.json({
-        success: true,
-        branding: {}
-      });
+    if (!moduleLoader.has('telegram')) {
+      return res.status(404).json({ success: false, error: 'Telegram module not available' });
     }
+
+    const telegram = moduleLoader.get('telegram');
+    const settings = await telegram.getUserSettings(req.user.id);
     
-    const brandingModule = moduleLoader.get('branding');
-    const branding = brandingModule.getBrandingData();
-    
-    res.json({
-      success: true,
-      branding
-    });
+    res.json({ success: true, settings });
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
+    console.error('Error getting telegram settings:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * POST /api/telegram/my-settings
+ * Save current user's telegram settings
+ */
+router.post('/telegram/my-settings', requireAuth, async (req, res) => {
+  try {
+    const moduleLoader = req.app.locals.moduleLoader;
+    
+    if (!moduleLoader.has('telegram')) {
+      return res.status(404).json({ success: false, error: 'Telegram module not available' });
+    }
+
+    const telegram = moduleLoader.get('telegram');
+    const result = await telegram.saveUserSettings(req.user.id, req.body);
+    
+    res.json({ success: true, result });
+  } catch (error) {
+    console.error('Error saving telegram settings:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * POST /api/telegram/my-settings/test
+ * Test current user's telegram configuration
+ */
+router.post('/telegram/my-settings/test', requireAuth, async (req, res) => {
+  try {
+    const moduleLoader = req.app.locals.moduleLoader;
+    
+    if (!moduleLoader.has('telegram')) {
+      return res.status(404).json({ success: false, error: 'Telegram module not available' });
+    }
+
+    const telegram = moduleLoader.get('telegram');
+    const result = await telegram.testUserNotification(req.user.id);
+    
+    res.json({ success: true, result });
+  } catch (error) {
+    console.error('Error testing telegram:', error);
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
 // ==============================================================================
-// File Hosting Routes
+// Files Routes (User-Specific with Admin Override)
 // ==============================================================================
 
 /**
- * GET /api/files
- * List all hosted files
+ * GET /api/files/my-files
+ * Get current user's files
  */
-router.get('/files', (req, res) => {
+router.get('/files/my-files', requireAuth, async (req, res) => {
   try {
     const moduleLoader = req.app.locals.moduleLoader;
     
     if (!moduleLoader.has('files')) {
-      return res.status(503).json({
-        success: false,
-        error: 'File hosting module not available'
-      });
+      return res.status(404).json({ success: false, error: 'Files module not available' });
     }
+
+    const files = moduleLoader.get('files');
+    const userFiles = await files.getUserFiles(req.user.id);
     
-    const filesModule = moduleLoader.get('files');
-    const files = filesModule.getFiles();
-    
-    // Add download URLs
-    const baseUrl = `${req.protocol}://${req.get('host')}`;
-    const filesWithUrls = files.map(file => ({
-      ...file,
-      downloadUrl: filesModule.getDownloadUrl(file, baseUrl)
-    }));
-    
-    res.json({
-      success: true,
-      files: filesWithUrls
-    });
+    res.json({ success: true, files: userFiles });
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
+    console.error('Error getting user files:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * GET /api/files/all
+ * Get all files (admin only)
+ */
+router.get('/files/all', requireAdmin, async (req, res) => {
+  try {
+    const moduleLoader = req.app.locals.moduleLoader;
+    
+    if (!moduleLoader.has('files')) {
+      return res.status(404).json({ success: false, error: 'Files module not available' });
+    }
+
+    const files = moduleLoader.get('files');
+    const allFiles = await files.getAllFiles();
+    
+    res.json({ success: true, files: allFiles });
+  } catch (error) {
+    console.error('Error getting all files:', error);
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
 /**
  * POST /api/files/upload
- * Upload a new file
- * Accepts multipart/form-data with 'file' field
+ * Upload a file (associated with current user)
  */
-router.post('/files/upload', async (req, res) => {
+router.post('/files/upload', requireAuth, async (req, res) => {
   try {
     const moduleLoader = req.app.locals.moduleLoader;
     
     if (!moduleLoader.has('files')) {
-      return res.status(503).json({
-        success: false,
-        error: 'File hosting module not available'
-      });
+      return res.status(404).json({ success: false, error: 'Files module not available' });
     }
+
+    const files = moduleLoader.get('files');
     
-    const filesModule = moduleLoader.get('files');
-    const settings = filesModule.getSettings();
+    // Pass user info for ownership
+    const result = await files.executeAction('upload', req.body, req.user);
     
-    if (!settings.enabled) {
-      return res.status(403).json({
-        success: false,
-        error: 'File hosting is disabled'
-      });
-    }
-    
-    // Parse multipart form data manually (simple implementation)
-    const contentType = req.headers['content-type'] || '';
-    
-    if (!contentType.includes('multipart/form-data')) {
-      return res.status(400).json({
-        success: false,
-        error: 'Content-Type must be multipart/form-data'
-      });
-    }
-    
-    // Get boundary
-    const boundaryMatch = contentType.match(/boundary=(.+)$/);
-    if (!boundaryMatch) {
-      return res.status(400).json({
-        success: false,
-        error: 'No boundary found in Content-Type'
-      });
-    }
-    
-    const boundary = boundaryMatch[1];
-    const chunks = [];
-    
-    req.on('data', chunk => chunks.push(chunk));
-    req.on('end', async () => {
-      try {
-        const buffer = Buffer.concat(chunks);
-        const data = buffer.toString('binary');
-        
-        // Parse multipart data
-        const parts = data.split(`--${boundary}`);
-        let fileData = null;
-        let customName = '';
-        
-        for (const part of parts) {
-          if (part.includes('Content-Disposition')) {
-            const nameMatch = part.match(/name="([^"]+)"/);
-            const filenameMatch = part.match(/filename="([^"]+)"/);
-            
-            if (nameMatch && nameMatch[1] === 'customName') {
-              // Extract custom name value
-              const valueStart = part.indexOf('\r\n\r\n') + 4;
-              const valueEnd = part.lastIndexOf('\r\n');
-              customName = part.substring(valueStart, valueEnd).trim();
-            }
-            
-            if (filenameMatch) {
-              // This is the file
-              const contentTypeMatch = part.match(/Content-Type:\s*([^\r\n]+)/);
-              const mimeType = contentTypeMatch ? contentTypeMatch[1].trim() : 'application/octet-stream';
-              
-              // Find where the content starts (after double CRLF)
-              const contentStart = part.indexOf('\r\n\r\n') + 4;
-              const contentEnd = part.lastIndexOf('\r\n');
-              const content = Buffer.from(part.substring(contentStart, contentEnd), 'binary');
-              
-              fileData = {
-                originalname: filenameMatch[1],
-                mimetype: mimeType,
-                size: content.length,
-                buffer: content
-              };
-            }
-          }
-        }
-        
-        if (!fileData) {
-          return res.status(400).json({
-            success: false,
-            error: 'No file found in request'
-          });
-        }
-        
-        // Save file to temp location first
-        const tempPath = path.join(os.tmpdir(), `upload_${crypto.randomUUID()}`);
-        fs.writeFileSync(tempPath, fileData.buffer);
-        fileData.path = tempPath;
-        
-        // Handle upload through module
-        const file = await filesModule.handleUpload(fileData, customName);
-        
-        // Add download URL
-        const baseUrl = `${req.protocol}://${req.get('host')}`;
-        file.downloadUrl = filesModule.getDownloadUrl(file, baseUrl);
-        
-        res.json({
-          success: true,
-          message: 'File uploaded successfully',
-          file
-        });
-        
-      } catch (error) {
-        console.error('Upload processing error:', error);
-        res.status(500).json({
-          success: false,
-          error: error.message
-        });
-      }
-    });
-    
+    res.json({ success: true, result });
   } catch (error) {
-    console.error('Upload error:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
+    console.error('Error uploading file:', error);
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
 /**
  * DELETE /api/files/:id
- * Delete a hosted file
+ * Delete a file (owner or admin only)
  */
-router.delete('/files/:id', async (req, res) => {
+router.delete('/files/:id', requireAuth, async (req, res) => {
   try {
     const moduleLoader = req.app.locals.moduleLoader;
     
     if (!moduleLoader.has('files')) {
-      return res.status(503).json({
-        success: false,
-        error: 'File hosting module not available'
-      });
+      return res.status(404).json({ success: false, error: 'Files module not available' });
+    }
+
+    const files = moduleLoader.get('files');
+    const file = await files.getFileById(req.params.id);
+    
+    if (!file) {
+      return res.status(404).json({ success: false, error: 'File not found' });
+    }
+
+    // Check ownership or admin
+    if (file.ownerId !== req.user.id && !req.user.isAdmin) {
+      return res.status(403).json({ success: false, error: 'Access denied' });
+    }
+
+    const result = await files.deleteFile(req.params.id);
+    
+    res.json({ success: true, result });
+  } catch (error) {
+    console.error('Error deleting file:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ==============================================================================
+// Admin Routes - User Management
+// ==============================================================================
+
+/**
+ * GET /api/admin/users
+ * List all users with their settings (admin only)
+ */
+router.get('/admin/users', requireAdmin, async (req, res) => {
+  try {
+    const configManager = req.app.locals.configManager;
+    const users = await configManager.get('users') || {};
+    
+    res.json({ success: true, users });
+  } catch (error) {
+    console.error('Error listing users:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * GET /api/admin/users/:id
+ * Get specific user's settings (admin only)
+ */
+router.get('/admin/users/:id', requireAdmin, async (req, res) => {
+  try {
+    const configManager = req.app.locals.configManager;
+    const users = await configManager.get('users') || {};
+    const user = users[req.params.id];
+    
+    if (!user) {
+      return res.status(404).json({ success: false, error: 'User not found' });
     }
     
-    const filesModule = moduleLoader.get('files');
-    const result = await filesModule.deleteFile(req.params.id);
-    
-    res.json(result);
+    res.json({ success: true, user });
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: error.message
+    console.error('Error getting user:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * PUT /api/admin/users/:id
+ * Update specific user's settings (admin only)
+ */
+router.put('/admin/users/:id', requireAdmin, async (req, res) => {
+  try {
+    const configManager = req.app.locals.configManager;
+    const users = await configManager.get('users') || {};
+    
+    users[req.params.id] = {
+      ...users[req.params.id],
+      ...req.body,
+      updatedAt: new Date().toISOString(),
+      updatedBy: req.user.id
+    };
+    
+    await configManager.set('users', users);
+    
+    res.json({ success: true, user: users[req.params.id] });
+  } catch (error) {
+    console.error('Error updating user:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ==============================================================================
+// Admin Routes - All Devices by User
+// ==============================================================================
+
+/**
+ * GET /api/admin/devices
+ * Get all devices organized by user (admin only)
+ * Fetches from MeshCentral API
+ */
+router.get('/admin/devices', requireAdmin, async (req, res) => {
+  try {
+    const http = require('http');
+    const cookies = req.headers.cookie || '';
+
+    // Fetch devices from MeshCentral
+    const meshResponse = await new Promise((resolve, reject) => {
+      const options = {
+        hostname: 'meshcentral',
+        port: 80,
+        path: '/api/meshes',
+        method: 'GET',
+        headers: {
+          'Cookie': cookies,
+          'Accept': 'application/json'
+        },
+        timeout: 10000
+      };
+
+      const request = http.request(options, (response) => {
+        let data = '';
+        response.on('data', chunk => data += chunk);
+        response.on('end', () => {
+          try {
+            resolve({ status: response.statusCode, data: JSON.parse(data) });
+          } catch (e) {
+            resolve({ status: response.statusCode, data: null, error: e.message });
+          }
+        });
+      });
+
+      request.on('error', reject);
+      request.on('timeout', () => {
+        request.destroy();
+        reject(new Error('Timeout'));
+      });
+
+      request.end();
     });
+
+    if (meshResponse.status !== 200 || !meshResponse.data) {
+      return res.status(500).json({ 
+        success: false, 
+        error: 'Failed to fetch devices from MeshCentral' 
+      });
+    }
+
+    // Organize devices by user
+    const devicesByUser = {};
+    const meshes = meshResponse.data.meshes || meshResponse.data || [];
+
+    for (const mesh of Object.values(meshes)) {
+      const userId = mesh.creation?.userid || mesh.links?.[0]?.userid || 'unknown';
+      
+      if (!devicesByUser[userId]) {
+        devicesByUser[userId] = {
+          userId,
+          meshes: []
+        };
+      }
+      
+      devicesByUser[userId].meshes.push({
+        id: mesh._id,
+        name: mesh.name,
+        desc: mesh.desc,
+        type: mesh.mtype,
+        deviceCount: mesh.nodes?.length || 0
+      });
+    }
+
+    res.json({ 
+      success: true, 
+      devicesByUser: Object.values(devicesByUser)
+    });
+  } catch (error) {
+    console.error('Error fetching devices:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ==============================================================================
+// Branding (Public Read, Admin Write)
+// ==============================================================================
+
+/**
+ * GET /api/branding
+ * Get branding settings (public - for MeshCentral UI)
+ */
+router.get('/branding', async (req, res) => {
+  try {
+    const moduleLoader = req.app.locals.moduleLoader;
+    
+    if (!moduleLoader || !moduleLoader.has('branding')) {
+      return res.json({ success: true, settings: {} });
+    }
+
+    const branding = moduleLoader.get('branding');
+    const settings = await branding.getSettings();
+    
+    res.json({ success: true, settings });
+  } catch (error) {
+    console.error('Error getting branding:', error);
+    res.json({ success: true, settings: {} });
+  }
+});
+
+// ==============================================================================
+// Webhook Endpoint (Public)
+// ==============================================================================
+
+/**
+ * POST /api/webhook/:source
+ * Receive webhooks from external sources (e.g., MeshCentral)
+ */
+router.post('/webhook/:source', async (req, res) => {
+  try {
+    const moduleLoader = req.app.locals.moduleLoader;
+    const { source } = req.params;
+
+    console.log(`Webhook received from ${source}:`, JSON.stringify(req.body).substring(0, 200));
+
+    // Process through telegram module if available
+    if (moduleLoader.has('telegram')) {
+      const telegram = moduleLoader.get('telegram');
+      await telegram.handleWebhook(source, req.body);
+    }
+
+    res.json({ success: true, received: true });
+  } catch (error) {
+    console.error('Webhook error:', error);
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 

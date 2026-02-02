@@ -851,9 +851,29 @@ configure_environment() {
         fi
     fi
     
-    # Email for SSL (if not dev mode)
+    # Cloudflare proxy detection
+    local use_cloudflare="false"
+    if [[ "$INTERACTIVE" == "true" ]] && [[ "$domain" != "localhost" ]] && ! is_ip_address "$domain"; then
+        echo ""
+        echo "  ┌─────────────────────────────────────────────────────────────────┐"
+        echo "  │  Are you using Cloudflare as a proxy for this domain?          │"
+        echo "  │                                                                 │"
+        echo "  │  If yes, make sure to:                                         │"
+        echo "  │    • Set SSL mode to 'Full' in Cloudflare dashboard            │"
+        echo "  │    • Enable WebSockets in Network settings                     │"
+        echo "  │    • Use orange cloud (Proxied) for your DNS A record          │"
+        echo "  └─────────────────────────────────────────────────────────────────┘"
+        echo ""
+        if prompt_yes_no "Are you using Cloudflare proxy?" "n"; then
+            use_cloudflare="true"
+            print_success "Cloudflare proxy mode enabled"
+            print_info "MeshCentral will be configured to trust Cloudflare headers"
+        fi
+    fi
+    
+    # Email for SSL (if not dev mode and not using Cloudflare)
     local email=""
-    if [[ "$DEV_MODE" != "true" ]]; then
+    if [[ "$DEV_MODE" != "true" ]] && [[ "$use_cloudflare" != "true" ]]; then
         email=$(prompt_value "Email for SSL certificate" "${SSL_EMAIL:-}" "SSL_EMAIL")
     fi
     
@@ -890,12 +910,20 @@ configure_environment() {
     update_env_file "$env_file" "ENVIRONMENT" "$environment"
     update_env_file "$env_file" "TZ" "$timezone"
     update_env_file "$env_file" "MESHCENTRAL_SESSION_KEY" "$session_key"
+    update_env_file "$env_file" "CLOUDFLARE_PROXY" "$use_cloudflare"
     
+    # Set SSL type based on configuration
     if [[ "$DEV_MODE" == "true" ]]; then
         update_env_file "$env_file" "SSL_TYPE" "self-signed"
+    elif [[ "$use_cloudflare" == "true" ]]; then
+        update_env_file "$env_file" "SSL_TYPE" "self-signed"
+        print_info "Using self-signed certificate (Cloudflare will provide trusted SSL to users)"
     else
         update_env_file "$env_file" "SSL_TYPE" "letsencrypt"
     fi
+    
+    # Export for use in this session
+    export CLOUDFLARE_PROXY="$use_cloudflare"
     
     # Reload environment
     load_env "$env_file"
@@ -1360,6 +1388,17 @@ print_completion() {
         echo ""
         print_warning "Development mode: Using self-signed certificate"
         print_info "Your browser will show a security warning - this is expected"
+    fi
+    
+    if [[ "${CLOUDFLARE_PROXY:-false}" == "true" ]]; then
+        echo ""
+        echo -e "${C_YELLOW}${C_BOLD}Cloudflare Configuration Checklist:${C_RESET}"
+        echo "  □ DNS A record points to your server IP with orange cloud (Proxied)"
+        echo "  □ SSL/TLS mode set to 'Full' (not Flexible, not Full Strict)"
+        echo "  □ WebSockets enabled in Network settings"
+        echo ""
+        print_info "If you see 'Unable to connect web socket' after login:"
+        print_info "  → Enable WebSockets in Cloudflare Dashboard → Network → WebSockets"
     fi
     
     echo ""

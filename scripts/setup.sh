@@ -1070,6 +1070,23 @@ configure_meshcentral() {
     sed -i "s|YOUR_DOMAIN_OR_IP|${domain}|g" "$config_file"
     sed -i "s|CHANGE_THIS_RANDOM_SESSION_KEY_32_CHARS_MIN|${session_key}|g" "$config_file"
     
+    # Apply Cloudflare-compatible settings if using Cloudflare proxy
+    if [[ "${CLOUDFLARE_PROXY:-false}" == "true" ]]; then
+        print_info "Applying Cloudflare-compatible settings to MeshCentral..."
+        
+        # Fix tlsOffload: change from "127.0.0.1" to true
+        sed -i 's/"tlsOffload": "127.0.0.1"/"tlsOffload": true/' "$config_file"
+        sed -i 's/"tlsOffload": ".*"/"tlsOffload": true/' "$config_file"
+        
+        # Fix trustedProxy: expand to include Docker networks
+        sed -i 's/"trustedProxy": "127.0.0.1"/"trustedProxy": "127.0.0.1,172.16.0.0\/12,10.0.0.0\/8,192.168.0.0\/16"/' "$config_file"
+        
+        # Fix sessionSameSite: change from strict to lax for Cloudflare compatibility
+        sed -i 's/"sessionSameSite": "strict"/"sessionSameSite": "lax"/' "$config_file"
+        
+        print_success "Cloudflare settings applied to MeshCentral"
+    fi
+    
     print_success "MeshCentral configured"
 }
 

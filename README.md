@@ -193,6 +193,42 @@ TZ=UTC
 </details>
 
 <details>
+<summary><strong>Cloudflare Setup (Recommended for production)</strong></summary>
+
+If you're using Cloudflare as a proxy for SSL/TLS, follow these steps:
+
+**1. DNS Configuration**
+- Add an A record pointing to your server IP
+- Enable the orange cloud (Proxied) status
+
+**2. Cloudflare Dashboard Settings**
+```
+SSL/TLS → Overview → Set to "Full" (not Flexible, not Full Strict)
+Network → WebSockets → Enable
+```
+
+**3. Environment Configuration**
+```bash
+# In your .env file
+CLOUDFLARE_PROXY=true
+SSL_TYPE=self-signed  # Cloudflare handles the trusted SSL
+```
+
+**Why "Full" SSL Mode?**
+- `Flexible`: Cloudflare → Your server over HTTP (causes "invalid origin" errors)
+- `Full`: Cloudflare → Your server over HTTPS with self-signed cert ✓
+- `Full (Strict)`: Requires a CA-signed certificate on your server
+
+**Troubleshooting**
+| Issue | Solution |
+|-------|----------|
+| "Unable to connect web socket" | Enable WebSockets in Cloudflare Network settings |
+| "Invalid HTTP in origin" | Change SSL mode to "Full" |
+| 502 Bad Gateway | Wait 30-60 seconds for services to start, check logs |
+
+</details>
+
+<details>
 <summary><strong>MeshCentral Settings</strong></summary>
 
 ```bash

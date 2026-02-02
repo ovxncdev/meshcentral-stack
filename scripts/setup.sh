@@ -926,6 +926,7 @@ configure_environment() {
     
     # Cloudflare proxy detection
     local use_cloudflare="false"
+    local agent_subdomain=""
     if [[ "$INTERACTIVE" == "true" ]] && [[ "$domain" != "localhost" ]] && ! is_ip_address "$domain"; then
         echo ""
         echo "  ┌─────────────────────────────────────────────────────────────────┐"
@@ -941,6 +942,26 @@ configure_environment() {
             use_cloudflare="true"
             print_success "Cloudflare proxy mode enabled"
             print_info "MeshCentral will be configured to trust Cloudflare headers"
+            
+            # Ask for agent subdomain
+            echo ""
+            echo "  ┌─────────────────────────────────────────────────────────────────┐"
+            echo "  │  IMPORTANT: Agent Subdomain Required                           │"
+            echo "  │                                                                 │"
+            echo "  │  MeshAgents cannot connect through Cloudflare proxy due to     │"
+            echo "  │  certificate pinning. You need a separate subdomain for agents │"
+            echo "  │  that bypasses Cloudflare (DNS only / gray cloud).             │"
+            echo "  │                                                                 │"
+            echo "  │  Example: agent.${domain}                                      │"
+            echo "  └─────────────────────────────────────────────────────────────────┘"
+            echo ""
+            
+            # Extract base domain for default suggestion
+            local default_agent="agent.${domain}"
+            agent_subdomain=$(prompt_value "Agent subdomain (DNS only, no Cloudflare proxy)" "$default_agent" "AGENT_SUBDOMAIN")
+            
+            print_info "Agent subdomain set to: ${agent_subdomain}"
+            print_warning "Remember to add this DNS record with GRAY cloud (DNS only)!"
             
             # Update Cloudflare IPs in nginx config
             print_info "Fetching latest Cloudflare IP ranges..."
@@ -997,6 +1018,7 @@ configure_environment() {
     update_env_file "$env_file" "TZ" "$timezone"
     update_env_file "$env_file" "MESHCENTRAL_SESSION_KEY" "$session_key"
     update_env_file "$env_file" "CLOUDFLARE_PROXY" "$use_cloudflare"
+    update_env_file "$env_file" "AGENT_SUBDOMAIN" "$agent_subdomain"
     
     # Set SSL type based on configuration
     if [[ "$DEV_MODE" == "true" ]]; then
@@ -1083,6 +1105,12 @@ configure_meshcentral() {
         
         # Fix sessionSameSite: change from strict to lax for Cloudflare compatibility
         sed -i 's/"sessionSameSite": "strict"/"sessionSameSite": "lax"/' "$config_file"
+        
+        # Update agentAliasDNS if agent subdomain is set
+        if [[ -n "${AGENT_SUBDOMAIN:-}" ]]; then
+            print_info "Setting agent subdomain to: ${AGENT_SUBDOMAIN}"
+            sed -i "s|\"agentAliasDNS\": \"${domain}\"|\"agentAliasDNS\": \"${AGENT_SUBDOMAIN}\"|g" "$config_file"
+        fi
         
         print_success "Cloudflare settings applied to MeshCentral"
     fi
@@ -1496,12 +1524,28 @@ print_completion() {
     if [[ "${CLOUDFLARE_PROXY:-false}" == "true" ]]; then
         echo ""
         echo -e "${C_YELLOW}${C_BOLD}Cloudflare Configuration Checklist:${C_RESET}"
-        echo "  □ DNS A record points to your server IP with orange cloud (Proxied)"
-        echo "  □ SSL/TLS mode set to 'Full' (not Flexible, not Full Strict)"
-        echo "  □ WebSockets enabled in Network settings"
+        echo ""
+        echo "  Main Domain (${SERVER_DOMAIN:-}):"
+        echo "    □ DNS A record points to your server IP with ORANGE cloud (Proxied)"
+        echo "    □ SSL/TLS mode set to 'Full' (not Flexible, not Full Strict)"
+        echo "    □ WebSockets enabled in Network settings"
+        echo ""
+        if [[ -n "${AGENT_SUBDOMAIN:-}" ]]; then
+            # Get server IP for instructions
+            local server_ip
+            server_ip=$(curl -4 -s ifconfig.me 2>/dev/null || echo "YOUR_SERVER_IP")
+            echo "  Agent Subdomain (${AGENT_SUBDOMAIN}):"
+            echo "    □ DNS A record: ${AGENT_SUBDOMAIN} → ${server_ip}"
+            echo "    □ Proxy status: GRAY cloud (DNS only) ← IMPORTANT!"
+            echo ""
+            echo -e "  ${C_RED}${C_BOLD}⚠ Agents will NOT connect if the agent subdomain uses Cloudflare proxy!${C_RESET}"
+        fi
         echo ""
         print_info "If you see 'Unable to connect web socket' after login:"
         print_info "  → Enable WebSockets in Cloudflare Dashboard → Network → WebSockets"
+        echo ""
+        print_info "If agents show 'bad web cert hash' error:"
+        print_info "  → Make sure ${AGENT_SUBDOMAIN:-agent subdomain} has GRAY cloud (DNS only)"
     fi
     
     echo ""

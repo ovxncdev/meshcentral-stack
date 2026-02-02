@@ -1,49 +1,28 @@
 /**
  * Module Loader
  * 
- * Dynamically loads and manages feature modules.
- * Modules are self-contained units that provide:
- *   - Settings schema (what can be configured)
- *   - Actions (test, execute, etc.)
- *   - Webhooks (event handlers)
- * 
- * To add a new module:
- *   1. Create a file in modules/ extending BaseModule
- *   2. Add it to AVAILABLE_MODULES below
- *   3. Done - it auto-registers with the dashboard
+ * Dynamically loads and manages all modules.
+ * Provides a unified interface for accessing module functionality.
  */
 
 const path = require('path');
-const BaseModule = require('./base');
+const fs = require('fs');
 
-// ==============================================================================
-// Available Modules
-// ==============================================================================
-
-// Add new modules here
+// Available modules - add new modules here
 const AVAILABLE_MODULES = [
-  'general',
   'telegram',
+  'files',
   'branding',
-  'email',
-  'webhook',
-  'files'
+  'webhook'
 ];
 
-// ==============================================================================
-// ModuleLoader Class
-// ==============================================================================
-
 class ModuleLoader {
-  /**
-   * Create a new ModuleLoader
-   * @param {ConfigManager} configManager - Config manager instance
-   */
   constructor(configManager) {
     this.configManager = configManager;
     this.modules = new Map();
+    this.modulesDir = __dirname;
   }
-  
+
   /**
    * Load all available modules
    */
@@ -55,119 +34,140 @@ class ModuleLoader {
         console.error(`Failed to load module '${moduleName}':`, error.message);
       }
     }
+    
+    console.log(`  Loaded ${this.modules.size}/${AVAILABLE_MODULES.length} modules`);
   }
-  
+
   /**
    * Load a single module
-   * @param {string} moduleName - Name of the module to load
    */
-  async load(moduleName) {
-    const modulePath = path.join(__dirname, `${moduleName}.js`);
+  async load(name) {
+    const modulePath = path.join(this.modulesDir, `${name}.js`);
     
-    // Import the module
-    const ModuleClass = require(modulePath);
-    
-    // Validate it extends BaseModule
-    if (!(ModuleClass.prototype instanceof BaseModule)) {
-      throw new Error(`Module '${moduleName}' does not extend BaseModule`);
+    // Check if module file exists
+    if (!fs.existsSync(modulePath)) {
+      throw new Error(`Module file not found: ${modulePath}`);
     }
+
+    // Load the module
+    const ModuleClass = require(modulePath);
+    const moduleInstance = new ModuleClass(this.configManager);
     
-    // Create instance
-    const moduleInstance = new ModuleClass();
-    moduleInstance.configManager = this.configManager;
-    
-    // Register default settings
-    const defaults = moduleInstance.getDefaultSettings();
-    await this.configManager.registerModule(moduleName, defaults);
-    
-    // Initialize module
+    // Initialize if the module has an init method
     if (typeof moduleInstance.init === 'function') {
       await moduleInstance.init();
     }
-    
-    // Store instance
-    this.modules.set(moduleName, moduleInstance);
-    
-    console.log(`  ✓ Loaded module: ${moduleInstance.displayName || moduleName}`);
+
+    this.modules.set(name, moduleInstance);
+    return moduleInstance;
   }
-  
+
   /**
-   * Get a module by name
-   * @param {string} name - Module name
-   * @returns {BaseModule} Module instance
-   */
-  get(name) {
-    return this.modules.get(name);
-  }
-  
-  /**
-   * Check if a module exists
-   * @param {string} name - Module name
-   * @returns {boolean}
+   * Check if a module is loaded
    */
   has(name) {
     return this.modules.has(name);
   }
-  
+
   /**
-   * Get list of all loaded modules
-   * @returns {Array} Module info array
+   * Get a loaded module
+   */
+  get(name) {
+    if (!this.modules.has(name)) {
+      throw new Error(`Module not loaded: ${name}`);
+    }
+    return this.modules.get(name);
+  }
+
+  /**
+   * Get list of all modules with metadata
    */
   getModuleList() {
     const list = [];
     
     for (const [name, module] of this.modules) {
       list.push({
-        name: module.name,
-        displayName: module.displayName,
-        description: module.description,
-        icon: module.icon,
-        enabled: module.isEnabled()
+        name,
+        displayName: module.displayName || module.name || name,
+        description: module.description || '',
+        icon: module.icon || 'settings',
+        enabled: typeof module.isEnabled === 'function' ? module.isEnabled() : true,
+        hasSchema: typeof module.getSchema === 'function',
+        hasActions: typeof module.executeAction === 'function'
       });
     }
     
     return list;
   }
-  
+
   /**
    * Execute an action on a module
-   * @param {string} moduleName - Module name
-   * @param {string} actionName - Action name
-   * @param {object} params - Action parameters
-   * @returns {Promise<object>} Action result
    */
-  async executeAction(moduleName, actionName, params = {}) {
+  async executeAction(moduleName, action, params, user) {
     const module = this.get(moduleName);
     
-    if (!module) {
-      throw new Error(`Module not found: ${moduleName}`);
+    if (typeof module.executeAction !== 'function') {
+      throw new Error(`Module '${moduleName}' does not support actions`);
     }
     
-    return module.executeAction(actionName, params);
+    return module.executeAction(action, params, user);
   }
-  
+
   /**
-   * Handle a webhook event
-   * @param {string} eventType - Event type
-   * @param {object} payload - Event payload
-   * @returns {Promise<object>} Results from all handlers
+   * Handle webhook events across all modules
    */
   async handleWebhook(eventType, payload) {
     const results = {};
     
     for (const [name, module] of this.modules) {
-      const handledEvents = module.getHandledEvents();
-      
-      if (handledEvents.includes(eventType)) {
+      if (typeof module.handleWebhook === 'function') {
         try {
-          results[name] = await module.handleEvent(eventType, payload);
+          results[name] = await module.handleWebhook(eventType, payload);
         } catch (error) {
+          console.error(`Webhook error in module '${name}':`, error.message);
           results[name] = { error: error.message };
         }
       }
     }
     
     return results;
+  }
+
+  /**
+   * Get all modules
+   */
+  getAll() {
+    return this.modules;
+  }
+
+  /**
+   * Reload a module
+   */
+  async reload(name) {
+    // Remove from cache
+    const modulePath = path.join(this.modulesDir, `${name}.js`);
+    delete require.cache[require.resolve(modulePath)];
+    
+    // Remove from loaded modules
+    this.modules.delete(name);
+    
+    // Reload
+    return this.load(name);
+  }
+
+  /**
+   * Reload all modules
+   */
+  async reloadAll() {
+    // Clear all
+    for (const name of this.modules.keys()) {
+      const modulePath = path.join(this.modulesDir, `${name}.js`);
+      delete require.cache[require.resolve(modulePath)];
+    }
+    this.modules.clear();
+    
+    // Reload all
+    await this.loadAll();
   }
 }
 

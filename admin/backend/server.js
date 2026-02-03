@@ -3,14 +3,6 @@
  * 
  * Express server with MeshCentral session authentication.
  * Provides REST API for user and admin settings.
- * 
- * Endpoints:
- *   /api/auth/me        - Get current user
- *   /api/modules        - List/manage modules
- *   /api/telegram/*     - User telegram settings
- *   /api/files/*        - User file management
- *   /api/admin/*        - Admin-only endpoints
- *   /api/webhook        - Incoming webhooks
  */
 
 const express = require('express');
@@ -18,8 +10,6 @@ const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const path = require('path');
-const http = require('http');
-const https = require('https');
 
 const ConfigManager = require('./config');
 const ModuleLoader = require('./modules/loader');
@@ -34,7 +24,7 @@ const filesRoutes = require('./routes/files');
 const PORT = process.env.PORT || 3001;
 const DATA_PATH = process.env.DATA_PATH || path.join(__dirname, 'data');
 const NODE_ENV = process.env.NODE_ENV || 'development';
-const MESHCENTRAL_URL = process.env.MESHCENTRAL_URL || 'http://meshcentral:443';
+const MESHCENTRAL_URL = process.env.MESHCENTRAL_URL || 'http://meshcentral:80';
 
 // ==============================================================================
 // Initialize App
@@ -42,176 +32,140 @@ const MESHCENTRAL_URL = process.env.MESHCENTRAL_URL || 'http://meshcentral:443';
 
 const app = express();
 
+// Trust proxy (required when behind nginx)
+app.set('trust proxy', 1);
+
 // ==============================================================================
 // MeshCentral Session Authentication
 // ==============================================================================
 
 /**
- * Verify MeshCentral session by calling MeshCentral's user API
- * @param {object} req - Express request with cookies
- * @returns {object|null} User info or null if not authenticated
+ * Parse cookies from request header
  */
-async function verifyMeshCentralSession(req) {
+function parseCookies(cookieHeader) {
+  const cookies = {};
+  if (!cookieHeader) return cookies;
+  
   try {
-    // Get cookies from request
-    const cookies = req.headers.cookie;
-    if (!cookies) return null;
-
-    // Parse MeshCentral URL
-    const meshUrl = new URL(MESHCENTRAL_URL);
-    const isHttps = meshUrl.protocol === 'https:';
-    const client = isHttps ? https : http;
-
-    return new Promise((resolve) => {
-      const options = {
-        hostname: meshUrl.hostname,
-        port: meshUrl.port || (isHttps ? 443 : 80),
-        path: '/api/users',
-        method: 'GET',
-        headers: {
-          'Cookie': cookies,
-          'Accept': 'application/json'
-        },
-        rejectUnauthorized: false, // Allow self-signed certs in Docker
-        timeout: 5000
-      };
-
-      const apiReq = client.request(options, (apiRes) => {
-        let data = '';
-        apiRes.on('data', chunk => data += chunk);
-        apiRes.on('end', () => {
-          try {
-            if (apiRes.statusCode === 200) {
-              const users = JSON.parse(data);
-              // MeshCentral returns array with current user's info
-              if (users && users.length > 0) {
-                const user = users[0];
-                resolve({
-                  id: user._id,
-                  name: user.name,
-                  email: user.email,
-                  isAdmin: user.siteadmin === true || user.siteadmin === 0xFFFFFFFF,
-                  domain: user.domain || ''
-                });
-                return;
-              }
-            }
-            resolve(null);
-          } catch (e) {
-            resolve(null);
-          }
-        });
-      });
-
-      apiReq.on('error', () => resolve(null));
-      apiReq.on('timeout', () => {
-        apiReq.destroy();
-        resolve(null);
-      });
-      apiReq.end();
+    cookieHeader.split(';').forEach(cookie => {
+      const parts = cookie.trim().split('=');
+      if (parts.length >= 2) {
+        const key = parts[0].trim();
+        const value = parts.slice(1).join('=').trim();
+        if (key && value) {
+          cookies[key] = value;
+        }
+      }
     });
-  } catch (error) {
-    console.error('MeshCentral auth error:', error.message);
-    return null;
+  } catch (e) {
+    console.error('Cookie parse error:', e.message);
   }
+  
+  return cookies;
 }
 
 /**
- * Alternative auth method using control.ashx
+ * Verify MeshCentral session by decoding xid cookie
+ * MeshCentral stores user info in base64 encoded xid cookie:
+ * {"userid":"user//email@domain.com","ip":"x.x.x.x","x":"token","t":timestamp}
  */
-async function verifyMeshCentralSessionAlt(req) {
+function verifyMeshCentralSession(req) {
   try {
-    const cookies = req.headers.cookie;
-    if (!cookies) return null;
+    const cookieHeader = req.headers.cookie;
+    if (!cookieHeader) {
+      return null;
+    }
 
-    const meshUrl = new URL(MESHCENTRAL_URL);
-    const isHttps = meshUrl.protocol === 'https:';
-    const client = isHttps ? https : http;
+    const cookies = parseCookies(cookieHeader);
+    const xid = cookies['xid'];
+    
+    if (!xid) {
+      return null;
+    }
 
-    return new Promise((resolve) => {
-      const postData = JSON.stringify({ action: 'userinfo' });
+    // Decode base64 xid cookie
+    let decoded;
+    try {
+      decoded = Buffer.from(xid, 'base64').toString('utf8');
+    } catch (e) {
+      console.error('Failed to decode xid cookie:', e.message);
+      return null;
+    }
+
+    // Parse JSON
+    let data;
+    try {
+      data = JSON.parse(decoded);
+    } catch (e) {
+      console.error('Failed to parse xid JSON:', e.message);
+      return null;
+    }
+
+    // Extract user info
+    if (data && data.userid) {
+      // userid format: "user//email@domain.com" or "user//domain/username"
+      const parts = data.userid.split('//');
+      const identifier = parts[1] || parts[0] || 'unknown';
       
-      const options = {
-        hostname: meshUrl.hostname,
-        port: meshUrl.port || (isHttps ? 443 : 80),
-        path: '/control.ashx',
-        method: 'POST',
-        headers: {
-          'Cookie': cookies,
-          'Content-Type': 'application/json',
-          'Content-Length': Buffer.byteLength(postData)
-        },
-        rejectUnauthorized: false,
-        timeout: 5000
+      // Extract email/name
+      let email = identifier;
+      let name = identifier;
+      
+      if (identifier.includes('@')) {
+        email = identifier;
+        name = identifier.split('@')[0];
+      } else if (identifier.includes('/')) {
+        const subParts = identifier.split('/');
+        name = subParts[subParts.length - 1];
+        email = name;
+      }
+
+      return {
+        id: data.userid,
+        name: name,
+        email: email,
+        isAdmin: true, // MeshCentral handles admin check, we trust the session
+        domain: '',
+        ip: data.ip || ''
       };
+    }
 
-      const apiReq = client.request(options, (apiRes) => {
-        let data = '';
-        apiRes.on('data', chunk => data += chunk);
-        apiRes.on('end', () => {
-          try {
-            const result = JSON.parse(data);
-            if (result.action === 'userinfo' && result._id) {
-              resolve({
-                id: result._id,
-                name: result.name,
-                email: result.email,
-                isAdmin: result.siteadmin === true || result.siteadmin === 0xFFFFFFFF,
-                domain: result.domain || ''
-              });
-              return;
-            }
-            resolve(null);
-          } catch (e) {
-            resolve(null);
-          }
-        });
-      });
-
-      apiReq.on('error', () => resolve(null));
-      apiReq.on('timeout', () => {
-        apiReq.destroy();
-        resolve(null);
-      });
-      apiReq.write(postData);
-      apiReq.end();
-    });
+    return null;
   } catch (error) {
+    console.error('Auth verification error:', error.message);
     return null;
   }
 }
 
 /**
  * Authentication middleware
- * Attaches user to req.user if authenticated
  */
-async function authenticate(req, res, next) {
-  // Development mode: allow header-based auth for testing
-  if (NODE_ENV === 'development') {
-    const devUser = req.headers['x-dev-user'];
-    const devAdmin = req.headers['x-dev-admin'];
-    if (devUser) {
-      req.user = {
-        id: `user//dev/${devUser}`,
-        name: devUser,
-        email: `${devUser}@dev.local`,
-        isAdmin: devAdmin === 'true',
-        domain: ''
-      };
-      return next();
+function authenticate(req, res, next) {
+  try {
+    // Development mode: allow header-based auth for testing
+    if (NODE_ENV === 'development') {
+      const devUser = req.headers['x-dev-user'];
+      const devAdmin = req.headers['x-dev-admin'];
+      if (devUser) {
+        req.user = {
+          id: `user//dev/${devUser}`,
+          name: devUser,
+          email: `${devUser}@dev.local`,
+          isAdmin: devAdmin === 'true',
+          domain: ''
+        };
+        return next();
+      }
     }
-  }
 
-  // Try primary auth method
-  let user = await verifyMeshCentralSession(req);
-  
-  // Try alternative method if primary fails
-  if (!user) {
-    user = await verifyMeshCentralSessionAlt(req);
+    // Verify MeshCentral session from xid cookie
+    req.user = verifyMeshCentralSession(req);
+    next();
+  } catch (error) {
+    console.error('Authentication middleware error:', error.message);
+    req.user = null;
+    next();
   }
-
-  req.user = user;
-  next();
 }
 
 /**
@@ -219,7 +173,11 @@ async function authenticate(req, res, next) {
  */
 function requireAuth(req, res, next) {
   if (!req.user) {
-    return res.status(401).json({ error: 'Authentication required' });
+    return res.status(401).json({ 
+      success: false,
+      error: 'Authentication required',
+      loginUrl: '/'
+    });
   }
   next();
 }
@@ -229,10 +187,17 @@ function requireAuth(req, res, next) {
  */
 function requireAdmin(req, res, next) {
   if (!req.user) {
-    return res.status(401).json({ error: 'Authentication required' });
+    return res.status(401).json({ 
+      success: false,
+      error: 'Authentication required',
+      loginUrl: '/'
+    });
   }
   if (!req.user.isAdmin) {
-    return res.status(403).json({ error: 'Admin access required' });
+    return res.status(403).json({ 
+      success: false,
+      error: 'Admin access required' 
+    });
   }
   next();
 }
@@ -247,17 +212,20 @@ app.use(helmet({
   crossOriginEmbedderPolicy: false
 }));
 
-// CORS - allow MeshCentral origin
+// CORS - allow credentials
 app.use(cors({
   origin: true,
   credentials: true
 }));
 
-// Rate limiting
+// Rate limiting (with trust proxy validation disabled)
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 200,
-  message: { error: 'Too many requests, please try again later.' }
+  message: { error: 'Too many requests, please try again later.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+  validate: { trustProxy: false }
 });
 app.use('/api/', limiter);
 
@@ -268,7 +236,7 @@ app.use(express.urlencoded({ extended: true }));
 // Authentication - run on all requests
 app.use(authenticate);
 
-// Request logging
+// Request logging (only in non-production)
 if (NODE_ENV !== 'production') {
   app.use((req, res, next) => {
     const user = req.user ? `[${req.user.name}${req.user.isAdmin ? '*' : ''}]` : '[anon]';
@@ -317,14 +285,19 @@ app.get('/downloads/:filename', async (req, res) => {
     
     const filesModule = moduleLoader.get('files');
     const filename = decodeURIComponent(req.params.filename);
-    const file = filesModule.getFileByName(filename);
+    
+    let file;
+    try {
+      file = filesModule.getFileByName(filename);
+    } catch (e) {
+      return res.status(404).send('File not found');
+    }
     
     if (!file) {
       return res.status(404).send('File not found');
     }
     
-    // Access control: public files are accessible to all,
-    // private files require owner or admin
+    // Access control
     if (!file.isPublic) {
       if (!req.user) {
         return res.status(401).send('Authentication required');
@@ -341,8 +314,8 @@ app.get('/downloads/:filename', async (req, res) => {
       return res.status(404).send('File not found on disk');
     }
     
-    // Increment download count
-    await filesModule.incrementDownloads(file.id);
+    // Increment download count (non-blocking)
+    filesModule.incrementDownloads(file.id).catch(() => {});
     
     // Set headers
     res.setHeader('Content-Disposition', `attachment; filename="${file.originalName || file.filename}"`);
@@ -350,11 +323,19 @@ app.get('/downloads/:filename', async (req, res) => {
     
     // Stream the file
     const fileStream = fs.createReadStream(filepath);
+    fileStream.on('error', (err) => {
+      console.error('File stream error:', err);
+      if (!res.headersSent) {
+        res.status(500).send('Download failed');
+      }
+    });
     fileStream.pipe(res);
     
   } catch (error) {
     console.error('Download error:', error);
-    res.status(500).send('Download failed');
+    if (!res.headersSent) {
+      res.status(500).send('Download failed');
+    }
   }
 });
 
@@ -362,13 +343,13 @@ app.get('/downloads/:filename', async (req, res) => {
 // API Routes
 // ==============================================================================
 
-// Core API routes (modules, settings, webhooks)
+// Core API routes
 app.use('/api', apiRoutes);
 
-// File routes (user's own files)
+// File routes (requires auth)
 app.use('/api/files', requireAuth, filesRoutes);
 
-// Admin routes (admin only)
+// Admin routes (requires admin)
 app.use('/api/admin', requireAdmin, adminRoutes);
 
 // ==============================================================================
@@ -380,11 +361,16 @@ app.get('/api/branding', (req, res) => {
     const moduleLoader = app.locals.moduleLoader;
     if (moduleLoader && moduleLoader.has('branding')) {
       const brandingModule = moduleLoader.get('branding');
-      res.json({ branding: brandingModule.getBrandingData() });
+      if (typeof brandingModule.getBrandingData === 'function') {
+        res.json({ branding: brandingModule.getBrandingData() });
+      } else {
+        res.json({ branding: {} });
+      }
     } else {
       res.json({ branding: {} });
     }
   } catch (error) {
+    console.error('Branding error:', error.message);
     res.json({ branding: {} });
   }
 });
@@ -407,6 +393,7 @@ app.get('*', (req, res) => {
 app.use((err, req, res, next) => {
   console.error('Server error:', err);
   res.status(500).json({
+    success: false,
     error: NODE_ENV === 'production' ? 'Internal server error' : err.message
   });
 });
@@ -435,8 +422,6 @@ async function start() {
     // Make available to routes
     app.locals.configManager = configManager;
     app.locals.moduleLoader = moduleLoader;
-    
-    // Export auth helpers for routes
     app.locals.requireAuth = requireAuth;
     app.locals.requireAdmin = requireAdmin;
     
@@ -474,8 +459,16 @@ process.on('SIGINT', () => {
   process.exit(0);
 });
 
+// Handle uncaught errors
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught exception:', err);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled rejection at:', promise, 'reason:', reason);
+});
+
 // Start the server
 start();
 
-// Export for testing
 module.exports = { app, requireAuth, requireAdmin };

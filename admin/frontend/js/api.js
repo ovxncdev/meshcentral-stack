@@ -338,6 +338,23 @@ const API = (function() {
       return get('/admin/devices');
     },
     
+    /**
+     * Sync admin access to all device groups (admin only)
+     * Ensures site admins can see all devices
+     * @returns {Promise<object>} Sync result
+     */
+    async syncAdminAccess() {
+      return post('/admin/sync-access', {});
+    },
+    
+    /**
+     * Get sync status for admins (admin only)
+     * @returns {Promise<object>} Status of admin access to device groups
+     */
+    async getSyncStatus() {
+      return get('/admin/sync-status');
+    },
+    
     // ==========================================================================
     // Admin - Files
     // ==========================================================================

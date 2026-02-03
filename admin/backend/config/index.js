@@ -7,11 +7,13 @@
  * Features:
  *   - Auto-creates data directory and default settings
  *   - Validates settings before saving
- *   - Supports nested settings paths
+ *   - Supports both direct keys and nested paths
+ *   - Synchronous and async access methods
  *   - Thread-safe writes with atomic file operations
  */
 
 const fs = require('fs').promises;
+const fsSync = require('fs');
 const path = require('path');
 
 // ==============================================================================
@@ -20,7 +22,7 @@ const path = require('path');
 
 const DEFAULT_SETTINGS = {
   // Meta
-  _version: '1.0.0',
+  _version: '2.0.0',
   _lastModified: null,
   
   // General
@@ -29,10 +31,7 @@ const DEFAULT_SETTINGS = {
     siteDescription: 'Secure Remote Access Portal',
     adminEmail: '',
     timezone: 'UTC'
-  },
-  
-  // Modules are registered dynamically
-  modules: {}
+  }
 };
 
 // ==============================================================================
@@ -89,49 +88,83 @@ class ConfigManager {
   }
   
   /**
-   * Get a specific setting by path
-   * @param {string} path - Dot-notation path (e.g., 'modules.telegram.enabled')
-   * @param {any} defaultValue - Default value if path doesn't exist
-   * @returns {any} The setting value
+   * Get a setting by key (async)
+   * Supports both direct keys ('telegram') and dot-notation ('modules.telegram.enabled')
+   * @param {string} key - Setting key or dot-notation path
+   * @param {any} defaultValue - Default value if key doesn't exist
+   * @returns {Promise<any>} The setting value
    */
-  get(path, defaultValue = null) {
-    this._checkInitialized();
-    
-    const parts = path.split('.');
-    let current = this.settings;
-    
-    for (const part of parts) {
-      if (current === null || current === undefined || typeof current !== 'object') {
-        return defaultValue;
-      }
-      current = current[part];
-    }
-    
-    return current !== undefined ? current : defaultValue;
+  async get(key, defaultValue = null) {
+    return this.getSync(key, defaultValue);
   }
   
   /**
-   * Set a specific setting by path
-   * @param {string} path - Dot-notation path
-   * @param {any} value - Value to set
+   * Get a setting by key (sync)
+   * Supports both direct keys ('telegram') and dot-notation ('modules.telegram.enabled')
+   * @param {string} key - Setting key or dot-notation path
+   * @param {any} defaultValue - Default value if key doesn't exist
+   * @returns {any} The setting value
    */
-  async set(path, value) {
+  getSync(key, defaultValue = null) {
     this._checkInitialized();
     
-    const parts = path.split('.');
-    let current = this.settings;
-    
-    // Navigate to parent
-    for (let i = 0; i < parts.length - 1; i++) {
-      const part = parts[i];
-      if (!(part in current) || typeof current[part] !== 'object') {
-        current[part] = {};
-      }
-      current = current[part];
+    // Direct key access (new style: 'telegram', 'files', etc.)
+    if (this.settings[key] !== undefined) {
+      return this.settings[key];
     }
     
-    // Set value
-    current[parts[parts.length - 1]] = value;
+    // Check in modules namespace (backward compatibility)
+    if (this.settings.modules && this.settings.modules[key] !== undefined) {
+      return this.settings.modules[key];
+    }
+    
+    // Dot-notation path access
+    if (key.includes('.')) {
+      const parts = key.split('.');
+      let current = this.settings;
+      
+      for (const part of parts) {
+        if (current === null || current === undefined || typeof current !== 'object') {
+          return defaultValue;
+        }
+        current = current[part];
+      }
+      
+      return current !== undefined ? current : defaultValue;
+    }
+    
+    return defaultValue;
+  }
+  
+  /**
+   * Set a setting by key (async)
+   * Supports both direct keys and dot-notation paths
+   * @param {string} key - Setting key or dot-notation path
+   * @param {any} value - Value to set
+   */
+  async set(key, value) {
+    this._checkInitialized();
+    
+    // Dot-notation path
+    if (key.includes('.')) {
+      const parts = key.split('.');
+      let current = this.settings;
+      
+      // Navigate to parent
+      for (let i = 0; i < parts.length - 1; i++) {
+        const part = parts[i];
+        if (!(part in current) || typeof current[part] !== 'object') {
+          current[part] = {};
+        }
+        current = current[part];
+      }
+      
+      // Set value
+      current[parts[parts.length - 1]] = value;
+    } else {
+      // Direct key access (new style)
+      this.settings[key] = value;
+    }
     
     // Update last modified
     this.settings._lastModified = new Date().toISOString();
@@ -140,21 +173,41 @@ class ConfigManager {
   }
   
   /**
-   * Get settings for a specific module
+   * Delete a setting by key
+   * @param {string} key - Setting key
+   */
+  async delete(key) {
+    this._checkInitialized();
+    
+    if (this.settings[key] !== undefined) {
+      delete this.settings[key];
+      this.settings._lastModified = new Date().toISOString();
+      await this._save();
+    }
+  }
+  
+  /**
+   * Get settings for a specific module (backward compatibility)
    * @param {string} moduleName - Module name
    * @returns {object} Module settings
    */
   getModuleSettings(moduleName) {
-    return this.get(`modules.${moduleName}`, {});
+    // Check direct key first (new style)
+    if (this.settings[moduleName] !== undefined) {
+      return this.settings[moduleName];
+    }
+    // Fall back to modules namespace (old style)
+    return this.getSync(`modules.${moduleName}`, {});
   }
   
   /**
-   * Save settings for a specific module
+   * Save settings for a specific module (backward compatibility)
    * @param {string} moduleName - Module name
    * @param {object} settings - Settings to save
    */
   async saveModuleSettings(moduleName, settings) {
-    await this.set(`modules.${moduleName}`, settings);
+    // Save directly under module name (new style)
+    await this.set(moduleName, settings);
   }
   
   /**
@@ -180,10 +233,35 @@ class ConfigManager {
    * @param {string} moduleName - Module name
    */
   async deleteModuleSettings(moduleName) {
+    // Delete from direct key
+    if (this.settings[moduleName]) {
+      delete this.settings[moduleName];
+    }
+    // Also delete from modules namespace (backward compatibility)
     if (this.settings.modules && this.settings.modules[moduleName]) {
       delete this.settings.modules[moduleName];
-      await this._save();
     }
+    await this._save();
+  }
+  
+  /**
+   * Check if a key exists
+   * @param {string} key - Setting key
+   * @returns {boolean}
+   */
+  has(key) {
+    this._checkInitialized();
+    return this.settings[key] !== undefined || 
+           (this.settings.modules && this.settings.modules[key] !== undefined);
+  }
+  
+  /**
+   * Get all keys (excluding meta keys)
+   * @returns {string[]}
+   */
+  keys() {
+    this._checkInitialized();
+    return Object.keys(this.settings).filter(k => !k.startsWith('_'));
   }
   
   /**
@@ -231,7 +309,7 @@ class ConfigManager {
   }
   
   /**
-   * Save settings to file
+   * Save settings to file (async)
    * @private
    */
   async _save() {
@@ -242,6 +320,16 @@ class ConfigManager {
     
     // Rename to actual file
     await fs.rename(tempFile, this.settingsFile);
+  }
+  
+  /**
+   * Save settings to file (sync) - for emergency use only
+   * @private
+   */
+  _saveSync() {
+    const tempFile = `${this.settingsFile}.tmp`;
+    fsSync.writeFileSync(tempFile, JSON.stringify(this.settings, null, 2), 'utf8');
+    fsSync.renameSync(tempFile, this.settingsFile);
   }
   
   /**

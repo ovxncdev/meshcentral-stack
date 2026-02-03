@@ -3,12 +3,6 @@
  * 
  * Handles file upload and download operations.
  * Users can manage their own files, admins can manage all.
- * 
- * Endpoints:
- *   GET    /api/files/my          - Get current user's files
- *   POST   /api/files/upload      - Upload a file
- *   PUT    /api/files/:id         - Update file properties
- *   DELETE /api/files/:id         - Delete a file
  */
 
 const express = require('express');
@@ -19,43 +13,28 @@ const os = require('os');
 const crypto = require('crypto');
 
 // ==============================================================================
-// Auth Middleware
-// ==============================================================================
-
-function requireAuth(req, res, next) {
-  if (!req.user) {
-    return res.status(401).json({
-      success: false,
-      error: 'Authentication required',
-      loginUrl: '/'
-    });
-  }
-  next();
-}
-
-// Apply to all routes
-router.use(requireAuth);
-
-// ==============================================================================
 // Get User's Files
 // ==============================================================================
 
 /**
  * GET /api/files/my
- * Get current user's files
  */
 router.get('/my', async (req, res) => {
   try {
     const moduleLoader = req.app.locals.moduleLoader;
     
-    if (!moduleLoader.has('files')) {
-      return res.status(404).json({ success: false, error: 'Files module not available' });
+    if (!moduleLoader || !moduleLoader.has('files')) {
+      return res.json({ success: true, files: [] });
     }
 
     const filesModule = moduleLoader.get('files');
-    const files = await filesModule.getUserFiles(req.user.id);
     
-    res.json({ success: true, files });
+    if (typeof filesModule.getUserFiles !== 'function') {
+      return res.json({ success: true, files: [] });
+    }
+    
+    const files = await filesModule.getUserFiles(req.user.id);
+    res.json({ success: true, files: files || [] });
   } catch (error) {
     console.error('Error getting user files:', error);
     res.status(500).json({ success: false, error: error.message });
@@ -68,14 +47,12 @@ router.get('/my', async (req, res) => {
 
 /**
  * POST /api/files/upload
- * Upload a new file
- * Accepts multipart/form-data with 'file' field
  */
 router.post('/upload', async (req, res) => {
   try {
     const moduleLoader = req.app.locals.moduleLoader;
     
-    if (!moduleLoader.has('files')) {
+    if (!moduleLoader || !moduleLoader.has('files')) {
       return res.status(503).json({
         success: false,
         error: 'File hosting module not available'
@@ -83,9 +60,15 @@ router.post('/upload', async (req, res) => {
     }
     
     const filesModule = moduleLoader.get('files');
-    const settings = await filesModule.getSettings();
     
-    if (!settings.enabled) {
+    let settings = {};
+    try {
+      settings = await filesModule.getSettings();
+    } catch (e) {
+      // Continue with defaults
+    }
+    
+    if (settings.enabled === false) {
       return res.status(403).json({
         success: false,
         error: 'File hosting is disabled'
@@ -115,6 +98,13 @@ router.post('/upload', async (req, res) => {
     const chunks = [];
     
     req.on('data', chunk => chunks.push(chunk));
+    req.on('error', (err) => {
+      console.error('Upload stream error:', err);
+      if (!res.headersSent) {
+        res.status(500).json({ success: false, error: 'Upload failed' });
+      }
+    });
+    
     req.on('end', async () => {
       try {
         const buffer = Buffer.concat(chunks);
@@ -149,11 +139,9 @@ router.post('/upload', async (req, res) => {
             }
             
             if (filenameMatch) {
-              // This is the file
               const contentTypeMatch = part.match(/Content-Type:\s*([^\r\n]+)/);
               const mimeType = contentTypeMatch ? contentTypeMatch[1].trim() : 'application/octet-stream';
               
-              // Find where the content starts (after double CRLF)
               const contentStart = part.indexOf('\r\n\r\n') + 4;
               const contentEnd = part.lastIndexOf('\r\n');
               const content = Buffer.from(part.substring(contentStart, contentEnd), 'binary');
@@ -175,23 +163,30 @@ router.post('/upload', async (req, res) => {
           });
         }
         
-        // Save file to temp location first
+        // Save to temp location
         const tempPath = path.join(os.tmpdir(), `upload_${crypto.randomUUID()}`);
         fs.writeFileSync(tempPath, fileData.buffer);
         fileData.path = tempPath;
         
-        // Handle upload through module (with user ownership)
+        // Handle upload through module
+        if (typeof filesModule.handleUpload !== 'function') {
+          fs.unlinkSync(tempPath);
+          return res.status(500).json({ success: false, error: 'Upload not supported' });
+        }
+        
         const file = await filesModule.handleUpload(fileData, customName, req.user);
         
         // Set public flag if requested
-        if (isPublic) {
+        if (isPublic && typeof filesModule.updateFile === 'function') {
           await filesModule.updateFile(file.id, { isPublic: true }, req.user);
           file.isPublic = true;
         }
         
         // Add download URL
         const baseUrl = `${req.protocol}://${req.get('host')}`;
-        file.downloadUrl = filesModule.getDownloadUrl(file, baseUrl);
+        if (typeof filesModule.getDownloadUrl === 'function') {
+          file.downloadUrl = filesModule.getDownloadUrl(file, baseUrl);
+        }
         
         res.json({
           success: true,
@@ -223,13 +218,12 @@ router.post('/upload', async (req, res) => {
 
 /**
  * PUT /api/files/:id
- * Update file properties (name, public status, expiration)
  */
 router.put('/:id', async (req, res) => {
   try {
     const moduleLoader = req.app.locals.moduleLoader;
     
-    if (!moduleLoader.has('files')) {
+    if (!moduleLoader || !moduleLoader.has('files')) {
       return res.status(503).json({
         success: false,
         error: 'File hosting module not available'
@@ -237,6 +231,11 @@ router.put('/:id', async (req, res) => {
     }
     
     const filesModule = moduleLoader.get('files');
+    
+    if (typeof filesModule.updateFile !== 'function') {
+      return res.status(400).json({ success: false, error: 'Update not supported' });
+    }
+    
     const file = await filesModule.updateFile(req.params.id, req.body, req.user);
     
     res.json({
@@ -245,7 +244,9 @@ router.put('/:id', async (req, res) => {
     });
   } catch (error) {
     console.error('Update file error:', error);
-    res.status(error.message === 'Access denied' ? 403 : 500).json({
+    const status = error.message === 'Access denied' ? 403 : 
+                   error.message === 'File not found' ? 404 : 500;
+    res.status(status).json({
       success: false,
       error: error.message
     });
@@ -258,13 +259,12 @@ router.put('/:id', async (req, res) => {
 
 /**
  * DELETE /api/files/:id
- * Delete a file (owner or admin only)
  */
 router.delete('/:id', async (req, res) => {
   try {
     const moduleLoader = req.app.locals.moduleLoader;
     
-    if (!moduleLoader.has('files')) {
+    if (!moduleLoader || !moduleLoader.has('files')) {
       return res.status(503).json({
         success: false,
         error: 'File hosting module not available'
@@ -272,13 +272,19 @@ router.delete('/:id', async (req, res) => {
     }
     
     const filesModule = moduleLoader.get('files');
-    const result = await filesModule.deleteFile(req.params.id, req.user);
     
-    if (!result.success) {
-      return res.status(result.error === 'Access denied' ? 403 : 404).json(result);
+    if (typeof filesModule.deleteFile !== 'function') {
+      return res.status(400).json({ success: false, error: 'Delete not supported' });
     }
     
-    res.json(result);
+    const result = await filesModule.deleteFile(req.params.id, req.user);
+    
+    if (result && !result.success) {
+      const status = result.error === 'Access denied' ? 403 : 404;
+      return res.status(status).json(result);
+    }
+    
+    res.json({ success: true, ...result });
   } catch (error) {
     console.error('Delete file error:', error);
     res.status(500).json({
@@ -294,13 +300,12 @@ router.delete('/:id', async (req, res) => {
 
 /**
  * GET /api/files/:id
- * Get file details (owner or admin only)
  */
 router.get('/:id', async (req, res) => {
   try {
     const moduleLoader = req.app.locals.moduleLoader;
     
-    if (!moduleLoader.has('files')) {
+    if (!moduleLoader || !moduleLoader.has('files')) {
       return res.status(503).json({
         success: false,
         error: 'File hosting module not available'
@@ -308,6 +313,11 @@ router.get('/:id', async (req, res) => {
     }
     
     const filesModule = moduleLoader.get('files');
+    
+    if (typeof filesModule.getFileById !== 'function') {
+      return res.status(400).json({ success: false, error: 'Not supported' });
+    }
+    
     const file = await filesModule.getFileById(req.params.id);
     
     if (!file) {
@@ -327,7 +337,9 @@ router.get('/:id', async (req, res) => {
     
     // Add download URL
     const baseUrl = `${req.protocol}://${req.get('host')}`;
-    file.downloadUrl = filesModule.getDownloadUrl(file, baseUrl);
+    if (typeof filesModule.getDownloadUrl === 'function') {
+      file.downloadUrl = filesModule.getDownloadUrl(file, baseUrl);
+    }
     
     res.json({
       success: true,

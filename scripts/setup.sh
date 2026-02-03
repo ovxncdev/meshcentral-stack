@@ -1109,7 +1109,8 @@ configure_meshcentral() {
         # Update agentAliasDNS if agent subdomain is set
         if [[ -n "${AGENT_SUBDOMAIN:-}" ]]; then
             print_info "Setting agent subdomain to: ${AGENT_SUBDOMAIN}"
-            sed -i "s|\"agentAliasDNS\": \"${domain}\"|\"agentAliasDNS\": \"${AGENT_SUBDOMAIN}\"|g" "$config_file"
+            # Replace agentAliasDNS value (handles both placeholder and domain)
+            sed -i "s|\"agentAliasDNS\": \"[^\"]*\"|\"agentAliasDNS\": \"${AGENT_SUBDOMAIN}\"|g" "$config_file"
         fi
         
         print_success "Cloudflare settings applied to MeshCentral"
@@ -1121,14 +1122,21 @@ configure_meshcentral() {
 configure_nginx() {
     local domain="$1"
     local site_config="$(get_path config)/nginx/sites/meshcentral.conf"
+    local agent_config="$(get_path config)/nginx/sites/agent.conf"
     
     if [[ ! -f "$site_config" ]]; then
         log_error "Nginx site config not found: $site_config"
         return 1
     fi
     
-    # Update domain in config
+    # Update domain in main config
     sed -i "s|YOUR_DOMAIN.COM|${domain}|g" "$site_config"
+    
+    # Update agent subdomain in agent.conf if using Cloudflare
+    if [[ -f "$agent_config" ]] && [[ -n "${AGENT_SUBDOMAIN:-}" ]]; then
+        print_info "Configuring agent subdomain: ${AGENT_SUBDOMAIN}"
+        sed -i "s|agent.YOUR_DOMAIN.COM|${AGENT_SUBDOMAIN}|g" "$agent_config"
+    fi
     
     print_success "Nginx configured"
 }

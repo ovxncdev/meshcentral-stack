@@ -1021,6 +1021,13 @@ ssl_generate_self_signed() {
     # Remove any existing broken symlinks or files
     run_with_sudo rm -f "$cert_file" "$key_file" 2>/dev/null || true
     
+    # Build SAN list - include agent subdomain if set
+    local san_list="DNS:${domain},DNS:*.${domain},DNS:localhost,IP:127.0.0.1"
+    if [[ -n "${AGENT_SUBDOMAIN:-}" ]]; then
+        san_list="${san_list},DNS:${AGENT_SUBDOMAIN}"
+        print_info "Including agent subdomain in certificate: ${AGENT_SUBDOMAIN}"
+    fi
+    
     # Generate certificate
     local openssl_output
     openssl_output=$(run_with_sudo openssl req -x509 -nodes \
@@ -1029,7 +1036,7 @@ ssl_generate_self_signed() {
         -keyout "$key_file" \
         -out "$cert_file" \
         -subj "/CN=${domain}/O=Remote Support/C=US" \
-        -addext "subjectAltName=DNS:${domain},DNS:*.${domain},DNS:localhost,IP:127.0.0.1" \
+        -addext "subjectAltName=${san_list}" \
         2>&1) || {
         # Fallback without -addext for older OpenSSL
         openssl_output=$(run_with_sudo openssl req -x509 -nodes \
@@ -1054,6 +1061,12 @@ ssl_generate_self_signed() {
         print_error "Certificate files were not created"
         return 1
     fi
+    
+    # Copy to MeshCentral cert locations
+    run_with_sudo cp "$cert_file" "${ssl_path}/webserver-cert-public.crt"
+    run_with_sudo cp "$key_file" "${ssl_path}/webserver-cert-private.key"
+    run_with_sudo chmod 644 "${ssl_path}/webserver-cert-public.crt"
+    run_with_sudo chmod 600 "${ssl_path}/webserver-cert-private.key"
     
     ssl_configure_nginx "$cert_file" "$key_file" "$domain"
     

@@ -44,6 +44,7 @@
       "title": "Remote Support",
       "title2": "Secure Remote Access Portal",
       "welcomeText": "Welcome to Remote Support Portal",
+      "footer": "<script>(function(){function a(){if(document.querySelector('#mySettingsBtn'))return;var b=document.createElement('a');b.id='mySettingsBtn';b.href='/my-settings/';b.innerHTML='⚙️ My Settings';b.style='position:fixed;bottom:20px;right:20px;background:#3182ce;color:#fff;padding:12px 20px;border-radius:8px;text-decoration:none;font-weight:500;box-shadow:0 4px 12px rgba(0,0,0,0.3);z-index:9999;font-family:sans-serif;font-size:14px;transition:all 0.2s;';b.onmouseenter=function(){this.style.background='#2c5282';this.style.transform='scale(1.05)';};b.onmouseleave=function(){this.style.background='#3182ce';this.style.transform='scale(1)';};document.body.appendChild(b);}if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',function(){setTimeout(a,1000);});}else{setTimeout(a,1000);}})();</script>",
       "newAccounts": true,
       "userNameIsEmail": true,
       "passwordRequirements": {

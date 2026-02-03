@@ -2,9 +2,7 @@
  * API Routes
  * 
  * Main router for all API endpoints.
- * Handles module operations with role-based access control.
- * 
- * Note: Admin routes are in admin.js, mounted separately at /api/admin
+ * Admin routes are in admin.js, mounted separately.
  */
 
 const express = require('express');
@@ -59,20 +57,23 @@ function requireAdmin(req, res, next) {
 // Module Routes
 // ==============================================================================
 
+const adminOnlyModules = ['branding', 'email', 'general', 'webhook'];
+
 /**
  * GET /api/modules
- * List all available modules with their status
- * Filters based on user role
+ * List all available modules
  */
 router.get('/modules', requireAuth, async (req, res) => {
   try {
     const moduleLoader = req.app.locals.moduleLoader;
+    
+    if (!moduleLoader) {
+      return res.status(503).json({ success: false, error: 'Module loader not available' });
+    }
+    
     const allModules = moduleLoader.getModuleList();
     
-    // Define which modules are admin-only
-    const adminOnlyModules = ['branding', 'email', 'general', 'webhook'];
-    
-    // Filter modules based on user role
+    // Filter based on user role
     const modules = allModules.filter(mod => {
       if (adminOnlyModules.includes(mod.name)) {
         return req.user.isAdmin;
@@ -80,7 +81,6 @@ router.get('/modules', requireAuth, async (req, res) => {
       return true;
     });
 
-    // Add role info to response
     res.json({
       success: true,
       isAdmin: req.user.isAdmin,
@@ -101,8 +101,11 @@ router.get('/modules/:name', requireAuth, async (req, res) => {
     const moduleLoader = req.app.locals.moduleLoader;
     const { name } = req.params;
     
+    if (!moduleLoader) {
+      return res.status(503).json({ success: false, error: 'Module loader not available' });
+    }
+    
     // Check admin-only modules
-    const adminOnlyModules = ['branding', 'email', 'general', 'webhook'];
     if (adminOnlyModules.includes(name) && !req.user.isAdmin) {
       return res.status(403).json({ 
         success: false, 
@@ -115,28 +118,38 @@ router.get('/modules/:name', requireAuth, async (req, res) => {
     }
 
     const module = moduleLoader.get(name);
-    const schema = module.getSchema ? module.getSchema() : null;
-    const settings = await module.getSettings();
-
-    // For user-specific modules, filter to user's own data
-    if (!req.user.isAdmin && module.getUserSettings) {
-      const userSettings = await module.getUserSettings(req.user.id);
-      res.json({
-        success: true,
-        name,
-        schema,
-        settings: userSettings,
-        isAdmin: false
-      });
-    } else {
-      res.json({
-        success: true,
-        name,
-        schema,
-        settings,
-        isAdmin: req.user.isAdmin
-      });
+    const schema = typeof module.getSchema === 'function' ? module.getSchema() : null;
+    
+    let settings = {};
+    try {
+      settings = await module.getSettings();
+    } catch (e) {
+      console.error(`Error getting settings for ${name}:`, e.message);
     }
+
+    // For user-specific modules, get user's own data
+    if (!req.user.isAdmin && typeof module.getUserSettings === 'function') {
+      try {
+        const userSettings = await module.getUserSettings(req.user.id);
+        return res.json({
+          success: true,
+          name,
+          schema,
+          settings: userSettings,
+          isAdmin: false
+        });
+      } catch (e) {
+        console.error(`Error getting user settings for ${name}:`, e.message);
+      }
+    }
+    
+    res.json({
+      success: true,
+      name,
+      schema,
+      settings,
+      isAdmin: req.user.isAdmin
+    });
   } catch (error) {
     console.error(`Error getting module ${req.params.name}:`, error);
     res.status(500).json({ success: false, error: error.message });
@@ -152,8 +165,11 @@ router.post('/modules/:name', requireAuth, async (req, res) => {
     const moduleLoader = req.app.locals.moduleLoader;
     const { name } = req.params;
     
+    if (!moduleLoader) {
+      return res.status(503).json({ success: false, error: 'Module loader not available' });
+    }
+    
     // Check admin-only modules
-    const adminOnlyModules = ['branding', 'email', 'general', 'webhook'];
     if (adminOnlyModules.includes(name) && !req.user.isAdmin) {
       return res.status(403).json({ 
         success: false, 
@@ -168,13 +184,13 @@ router.post('/modules/:name', requireAuth, async (req, res) => {
     const module = moduleLoader.get(name);
     
     // For user-specific modules, save under user's ID
-    if (!req.user.isAdmin && module.saveUserSettings) {
+    if (!req.user.isAdmin && typeof module.saveUserSettings === 'function') {
       const result = await module.saveUserSettings(req.user.id, req.body);
-      res.json({ success: true, result });
-    } else {
-      const result = await module.saveSettings(req.body);
-      res.json({ success: true, result });
+      return res.json({ success: true, result });
     }
+    
+    const result = await module.saveSettings(req.body);
+    res.json({ success: true, result });
   } catch (error) {
     console.error(`Error saving module ${req.params.name}:`, error);
     res.status(500).json({ success: false, error: error.message });
@@ -190,8 +206,11 @@ router.post('/modules/:name/action/:action', requireAuth, async (req, res) => {
     const moduleLoader = req.app.locals.moduleLoader;
     const { name, action } = req.params;
     
+    if (!moduleLoader) {
+      return res.status(503).json({ success: false, error: 'Module loader not available' });
+    }
+    
     // Check admin-only modules
-    const adminOnlyModules = ['branding', 'email', 'general', 'webhook'];
     if (adminOnlyModules.includes(name) && !req.user.isAdmin) {
       return res.status(403).json({ 
         success: false, 
@@ -205,11 +224,10 @@ router.post('/modules/:name/action/:action', requireAuth, async (req, res) => {
 
     const module = moduleLoader.get(name);
 
-    if (!module.executeAction) {
+    if (typeof module.executeAction !== 'function') {
       return res.status(400).json({ success: false, error: 'Module does not support actions' });
     }
 
-    // Pass user info to action
     const result = await module.executeAction(action, req.body, req.user);
     res.json({ success: true, result });
   } catch (error) {
@@ -224,20 +242,23 @@ router.post('/modules/:name/action/:action', requireAuth, async (req, res) => {
 
 /**
  * GET /api/telegram/my-settings
- * Get current user's telegram settings
  */
 router.get('/telegram/my-settings', requireAuth, async (req, res) => {
   try {
     const moduleLoader = req.app.locals.moduleLoader;
     
-    if (!moduleLoader.has('telegram')) {
-      return res.status(404).json({ success: false, error: 'Telegram module not available' });
+    if (!moduleLoader || !moduleLoader.has('telegram')) {
+      return res.json({ success: true, settings: {} });
     }
 
     const telegram = moduleLoader.get('telegram');
-    const settings = await telegram.getUserSettings(req.user.id);
     
-    res.json({ success: true, settings });
+    if (typeof telegram.getUserSettings !== 'function') {
+      return res.json({ success: true, settings: {} });
+    }
+    
+    const settings = await telegram.getUserSettings(req.user.id);
+    res.json({ success: true, settings: settings || {} });
   } catch (error) {
     console.error('Error getting telegram settings:', error);
     res.status(500).json({ success: false, error: error.message });
@@ -246,19 +267,22 @@ router.get('/telegram/my-settings', requireAuth, async (req, res) => {
 
 /**
  * POST /api/telegram/my-settings
- * Save current user's telegram settings
  */
 router.post('/telegram/my-settings', requireAuth, async (req, res) => {
   try {
     const moduleLoader = req.app.locals.moduleLoader;
     
-    if (!moduleLoader.has('telegram')) {
+    if (!moduleLoader || !moduleLoader.has('telegram')) {
       return res.status(404).json({ success: false, error: 'Telegram module not available' });
     }
 
     const telegram = moduleLoader.get('telegram');
-    const result = await telegram.saveUserSettings(req.user.id, req.body);
     
+    if (typeof telegram.saveUserSettings !== 'function') {
+      return res.status(400).json({ success: false, error: 'Module does not support user settings' });
+    }
+    
+    const result = await telegram.saveUserSettings(req.user.id, req.body);
     res.json({ success: true, result });
   } catch (error) {
     console.error('Error saving telegram settings:', error);
@@ -268,19 +292,22 @@ router.post('/telegram/my-settings', requireAuth, async (req, res) => {
 
 /**
  * POST /api/telegram/my-settings/test
- * Test current user's telegram configuration
  */
 router.post('/telegram/my-settings/test', requireAuth, async (req, res) => {
   try {
     const moduleLoader = req.app.locals.moduleLoader;
     
-    if (!moduleLoader.has('telegram')) {
+    if (!moduleLoader || !moduleLoader.has('telegram')) {
       return res.status(404).json({ success: false, error: 'Telegram module not available' });
     }
 
     const telegram = moduleLoader.get('telegram');
-    const result = await telegram.testUserNotification(req.user.id);
     
+    if (typeof telegram.testUserNotification !== 'function') {
+      return res.status(400).json({ success: false, error: 'Test not available' });
+    }
+    
+    const result = await telegram.testUserNotification(req.user.id);
     res.json({ success: true, result });
   } catch (error) {
     console.error('Error testing telegram:', error);
@@ -292,10 +319,6 @@ router.post('/telegram/my-settings/test', requireAuth, async (req, res) => {
 // Branding (Public Read)
 // ==============================================================================
 
-/**
- * GET /api/branding
- * Get branding settings (public - for MeshCentral UI)
- */
 router.get('/branding', async (req, res) => {
   try {
     const moduleLoader = req.app.locals.moduleLoader;
@@ -305,22 +328,28 @@ router.get('/branding', async (req, res) => {
     }
 
     const branding = moduleLoader.get('branding');
-    const settings = await branding.getSettings();
+    
+    let settings = {};
+    try {
+      settings = await branding.getSettings();
+    } catch (e) {
+      // Ignore errors, return empty
+    }
     
     // Only return public-safe fields
     res.json({ 
       success: true, 
       settings: {
-        enabled: settings.enabled,
-        companyName: settings.companyName,
-        pageTitle: settings.pageTitle,
-        logoUrl: settings.logoUrl,
-        faviconUrl: settings.faviconUrl,
-        primaryColor: settings.primaryColor,
-        headerColor: settings.headerColor,
-        headerTextColor: settings.headerTextColor,
-        welcomeMessage: settings.welcomeMessage,
-        footerText: settings.footerText
+        enabled: settings.enabled || false,
+        companyName: settings.companyName || '',
+        pageTitle: settings.pageTitle || '',
+        logoUrl: settings.logoUrl || '',
+        faviconUrl: settings.faviconUrl || '',
+        primaryColor: settings.primaryColor || '',
+        headerColor: settings.headerColor || '',
+        headerTextColor: settings.headerTextColor || '',
+        welcomeMessage: settings.welcomeMessage || '',
+        footerText: settings.footerText || ''
       }
     });
   } catch (error) {
@@ -333,10 +362,6 @@ router.get('/branding', async (req, res) => {
 // Webhook Endpoint (Public)
 // ==============================================================================
 
-/**
- * POST /api/webhook/:source
- * Receive webhooks from external sources (e.g., MeshCentral)
- */
 router.post('/webhook/:source', async (req, res) => {
   try {
     const moduleLoader = req.app.locals.moduleLoader;
@@ -344,15 +369,20 @@ router.post('/webhook/:source', async (req, res) => {
 
     console.log(`Webhook received from ${source}:`, JSON.stringify(req.body).substring(0, 200));
 
-    // Process through webhook module if available
-    if (moduleLoader.has('webhook')) {
-      const webhook = moduleLoader.get('webhook');
-      const { eventType, payload } = await webhook.processIncoming(req.body, req.query.secret);
-      
-      // Forward to telegram module for notifications
-      if (moduleLoader.has('telegram')) {
-        const telegram = moduleLoader.get('telegram');
-        await telegram.handleWebhook(eventType, payload);
+    if (moduleLoader && moduleLoader.has('webhook')) {
+      try {
+        const webhook = moduleLoader.get('webhook');
+        const result = await webhook.processIncoming(req.body, req.query.secret);
+        
+        // Forward to telegram if available
+        if (moduleLoader.has('telegram') && result && result.eventType) {
+          const telegram = moduleLoader.get('telegram');
+          if (typeof telegram.handleWebhook === 'function') {
+            await telegram.handleWebhook(result.eventType, result.payload);
+          }
+        }
+      } catch (e) {
+        console.error('Webhook processing error:', e.message);
       }
     }
 

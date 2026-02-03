@@ -553,4 +553,118 @@ router.get('/system', async (req, res) => {
   }
 });
 
+// ==============================================================================
+// Admin Access Sync
+// ==============================================================================
+
+/**
+ * POST /api/admin/sync-access
+ * Sync admin access to all device groups
+ * Ensures all site admins can see all devices
+ */
+router.post('/sync-access', async (req, res) => {
+  try {
+    const Datastore = require('@seald-io/nedb');
+    const dbPath = process.env.MESHCENTRAL_DB_PATH || '/opt/meshcentral/meshcentral-data/meshcentral.db';
+    
+    const db = new Datastore({ filename: dbPath, autoload: true });
+    
+    // Helper to promisify db operations
+    const dbFind = (query) => new Promise((resolve, reject) => {
+      db.find(query, (err, docs) => err ? reject(err) : resolve(docs));
+    });
+    
+    const dbUpdate = (query, update) => new Promise((resolve, reject) => {
+      db.update(query, update, {}, (err, num) => err ? reject(err) : resolve(num));
+    });
+    
+    // Find all site admins (siteadmin field with full rights = 4294967295)
+    const admins = await dbFind({ type: 'user', siteadmin: 4294967295 });
+    console.log(`Found ${admins.length} site admin(s)`);
+    
+    // Find all active device groups (meshes that are not deleted)
+    const meshes = await dbFind({ type: 'mesh', deleted: { $exists: false } });
+    console.log(`Found ${meshes.length} active device group(s)`);
+    
+    let updates = 0;
+    
+    for (const admin of admins) {
+      const userEmail = admin.name;
+      const userId = admin._id;
+      // URL encode the email for the key (. becomes %2E)
+      const userKey = 'user//' + userEmail.replace(/\./g, '%2E');
+      
+      for (const mesh of meshes) {
+        const meshId = mesh._id;
+        
+        // Check if admin already has access to this mesh
+        const hasAccess = admin.links && admin.links[meshId];
+        
+        if (!hasAccess) {
+          // Add mesh link to user record
+          const userUpdate = {};
+          userUpdate['links.' + meshId] = { rights: 4294967295 };
+          await dbUpdate({ _id: userId }, { $set: userUpdate });
+          
+          // Add user link to mesh record
+          const meshUpdate = {};
+          meshUpdate['links.' + userKey] = { name: userEmail, rights: 4294967295 };
+          await dbUpdate({ _id: meshId }, { $set: meshUpdate });
+          
+          updates++;
+          console.log(`Added ${userEmail} to mesh ${mesh.name}`);
+        }
+      }
+    }
+    
+    res.json({
+      success: true,
+      message: `Synced ${admins.length} admin(s) with ${meshes.length} device group(s). ${updates} new access grants.`,
+      admins: admins.length,
+      deviceGroups: meshes.length,
+      newGrants: updates
+    });
+  } catch (error) {
+    console.error('Sync error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * GET /api/admin/sync-status
+ * Check current sync status - which admins have access to which groups
+ */
+router.get('/sync-status', async (req, res) => {
+  try {
+    const Datastore = require('@seald-io/nedb');
+    const dbPath = process.env.MESHCENTRAL_DB_PATH || '/opt/meshcentral/meshcentral-data/meshcentral.db';
+    
+    const db = new Datastore({ filename: dbPath, autoload: true });
+    
+    const dbFind = (query) => new Promise((resolve, reject) => {
+      db.find(query, (err, docs) => err ? reject(err) : resolve(docs));
+    });
+    
+    const admins = await dbFind({ type: 'user', siteadmin: 4294967295 });
+    const meshes = await dbFind({ type: 'mesh', deleted: { $exists: false } });
+    
+    const status = admins.map(admin => ({
+      email: admin.name,
+      accessCount: Object.keys(admin.links || {}).filter(k => k.startsWith('mesh//')).length,
+      totalGroups: meshes.length,
+      synced: Object.keys(admin.links || {}).filter(k => k.startsWith('mesh//')).length >= meshes.length
+    }));
+    
+    res.json({
+      success: true,
+      admins: status,
+      totalDeviceGroups: meshes.length,
+      allSynced: status.every(s => s.synced)
+    });
+  } catch (error) {
+    console.error('Sync status error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 module.exports = router;

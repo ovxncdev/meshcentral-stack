@@ -3,10 +3,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Admin Dashboard - Remote Support</title>
+    <title>My Settings - Remote Support</title>
     
     <!-- Base URL for all relative paths -->
-    <base href="/admin-settings/">
+    <base href="/my-settings/">
     
     <!-- Favicon -->
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚙️</text></svg>">
@@ -15,7 +15,26 @@
     <link rel="stylesheet" href="css/styles.css">
 </head>
 <body>
-    <div id="app">
+    <!-- Loading Screen -->
+    <div id="loadingScreen" class="loading-screen">
+        <div class="loading-spinner"></div>
+        <p>Loading...</p>
+    </div>
+
+    <!-- Login Required Screen -->
+    <div id="loginRequired" class="login-required" style="display: none;">
+        <div class="login-card">
+            <div class="login-icon">
+                <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+            </div>
+            <h2>Login Required</h2>
+            <p>Please log in to MeshCentral to access your settings.</p>
+            <a href="/" class="btn btn-primary">Go to Login</a>
+        </div>
+    </div>
+
+    <!-- Main App -->
+    <div id="app" style="display: none;">
         <!-- Sidebar -->
         <aside class="sidebar" id="sidebar">
             <div class="sidebar-header">
@@ -23,27 +42,75 @@
                     <span class="logo-icon">
                         <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
                     </span>
-                    <span class="logo-text">Admin</span>
+                    <span class="logo-text">My Settings</span>
+                </div>
+                <!-- User Info -->
+                <div class="user-info" id="userInfo">
+                    <span class="user-name" id="userName">Loading...</span>
+                    <span class="user-role" id="userRole"></span>
                 </div>
             </div>
             
             <nav class="sidebar-nav" id="moduleNav">
-                <!-- Module navigation items will be inserted here -->
-                <div class="nav-loading">Loading modules...</div>
+                <!-- My Settings Section -->
+                <div class="nav-section">
+                    <div class="nav-section-title">My Settings</div>
+                    <a href="#telegram" class="nav-item" data-module="telegram">
+                        <span class="nav-icon">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+                        </span>
+                        <span class="nav-label">Telegram</span>
+                    </a>
+                    <a href="#files" class="nav-item" data-module="files">
+                        <span class="nav-icon">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>
+                        </span>
+                        <span class="nav-label">My Files</span>
+                    </a>
+                </div>
+
+                <!-- Admin Section (hidden for non-admins) -->
+                <div class="nav-section admin-only" id="adminSection" style="display: none;">
+                    <div class="nav-section-title">Administration</div>
+                    <a href="#users" class="nav-item" data-module="admin-users">
+                        <span class="nav-icon">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+                        </span>
+                        <span class="nav-label">All Users</span>
+                    </a>
+                    <a href="#devices" class="nav-item" data-module="admin-devices">
+                        <span class="nav-icon">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>
+                        </span>
+                        <span class="nav-label">All Devices</span>
+                    </a>
+                    <a href="#all-files" class="nav-item" data-module="admin-files">
+                        <span class="nav-icon">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+                        </span>
+                        <span class="nav-label">All Files</span>
+                    </a>
+                    <a href="#branding" class="nav-item" data-module="branding">
+                        <span class="nav-icon">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="13.5" cy="6.5" r=".5"></circle><circle cx="17.5" cy="10.5" r=".5"></circle><circle cx="8.5" cy="7.5" r=".5"></circle><circle cx="6.5" cy="12.5" r=".5"></circle><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.555C21.965 6.012 17.461 2 12 2z"></path></svg>
+                        </span>
+                        <span class="nav-label">Branding</span>
+                    </a>
+                    <a href="#webhook" class="nav-item" data-module="webhook">
+                        <span class="nav-icon">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>
+                        </span>
+                        <span class="nav-label">Webhooks</span>
+                    </a>
+                </div>
             </nav>
             
             <div class="sidebar-footer">
-                <a href="/" class="nav-item" target="_blank">
+                <a href="/" class="nav-item">
                     <span class="nav-icon">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>
+                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
                     </span>
-                    <span class="nav-label">MeshCentral</span>
-                </a>
-                <a href="/support" class="nav-item" target="_blank">
-                    <span class="nav-icon">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 18v-6a9 9 0 0 1 18 0v6"></path><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"></path></svg>
-                    </span>
-                    <span class="nav-label">Support Portal</span>
+                    <span class="nav-label">Back to Dashboard</span>
                 </a>
             </div>
         </aside>
@@ -58,13 +125,14 @@
                     <span></span>
                 </button>
                 
-                <h1 class="header-title" id="pageTitle">Dashboard</h1>
+                <h1 class="header-title" id="pageTitle">My Settings</h1>
                 
                 <div class="header-actions">
                     <button class="btn btn-icon" id="refreshBtn" title="Refresh">
                         <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
                     </button>
-                    <button class="btn btn-icon" id="exportBtn" title="Export Settings">
+                    <!-- Admin only: Export -->
+                    <button class="btn btn-icon admin-only" id="exportBtn" title="Export Settings" style="display: none;">
                         <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
                     </button>
                 </div>
@@ -72,11 +140,11 @@
             
             <!-- Content Area -->
             <div class="content" id="content">
-                <!-- Dashboard Home -->
+                <!-- Welcome/Dashboard Home -->
                 <div class="dashboard-home" id="dashboardHome">
                     <div class="welcome-card">
-                        <h2>Welcome to Remote Support Admin</h2>
-                        <p>Configure your remote support system using the modules on the left.</p>
+                        <h2>Welcome, <span id="welcomeName">User</span>!</h2>
+                        <p>Manage your notification settings and files.</p>
                     </div>
                     
                     <div class="quick-stats" id="quickStats">
@@ -84,14 +152,28 @@
                     </div>
                     
                     <div class="module-grid" id="moduleGrid">
-                        <!-- Module cards will be loaded here -->
+                        <!-- Quick access cards -->
+                        <div class="module-card" data-module="telegram">
+                            <div class="module-card-icon">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+                            </div>
+                            <h3>Telegram Notifications</h3>
+                            <p>Configure your personal Telegram alerts</p>
+                        </div>
+                        <div class="module-card" data-module="files">
+                            <div class="module-card-icon">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>
+                            </div>
+                            <h3>My Files</h3>
+                            <p>Upload and manage your shared files</p>
+                        </div>
                     </div>
                 </div>
                 
                 <!-- Module Settings Panel (hidden by default) -->
                 <div class="module-panel" id="modulePanel" style="display: none;">
                     <div class="panel-header">
-                        <h2 class="panel-title" id="modulePanelTitle">Module Settings</h2>
+                        <h2 class="panel-title" id="modulePanelTitle">Settings</h2>
                         <p class="panel-description" id="modulePanelDescription"></p>
                     </div>
                     
@@ -108,6 +190,40 @@
                         <button type="submit" class="btn btn-primary" id="saveBtn" form="settingsForm">
                             💾 Save Settings
                         </button>
+                    </div>
+                </div>
+
+                <!-- Admin Panels -->
+                <div class="admin-panel" id="adminUsersPanel" style="display: none;">
+                    <div class="panel-header">
+                        <h2 class="panel-title">All Users</h2>
+                        <p class="panel-description">View and manage user settings</p>
+                    </div>
+                    <div class="users-list" id="usersList">
+                        <!-- Users will be loaded here -->
+                    </div>
+                </div>
+
+                <div class="admin-panel" id="adminDevicesPanel" style="display: none;">
+                    <div class="panel-header">
+                        <h2 class="panel-title">All Devices</h2>
+                        <p class="panel-description">Devices organized by user</p>
+                    </div>
+                    <div class="devices-list" id="devicesList">
+                        <!-- Devices will be loaded here -->
+                    </div>
+                </div>
+
+                <div class="admin-panel" id="adminFilesPanel" style="display: none;">
+                    <div class="panel-header">
+                        <h2 class="panel-title">All Files</h2>
+                        <p class="panel-description">Files from all users</p>
+                    </div>
+                    <div class="files-stats" id="filesStats">
+                        <!-- Stats will be loaded here -->
+                    </div>
+                    <div class="files-list" id="allFilesList">
+                        <!-- Files will be loaded here -->
                     </div>
                 </div>
             </div>

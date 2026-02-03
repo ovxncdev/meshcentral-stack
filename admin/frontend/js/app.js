@@ -496,40 +496,155 @@ const App = (function() {
     elements.pageTitle().textContent = 'All Devices';
     elements.adminDevicesPanel().style.display = 'block';
     
+    // Show loading state
+    elements.devicesList().innerHTML = '<p class="loading-state">Loading devices...</p>';
+    
     try {
+      // First check sync status
+      let syncStatus = null;
+      try {
+        syncStatus = await API.getSyncStatus();
+      } catch (e) {
+        console.log('Could not get sync status:', e);
+      }
+      
+      // Build header with sync button
+      let html = `
+        <div class="devices-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; padding: 15px; background: #f8fafc; border-radius: 8px;">
+          <div>
+            <h3 style="margin: 0 0 5px 0;">Device Groups Overview</h3>
+            <p style="margin: 0; color: #64748b; font-size: 14px;">
+              ${syncStatus ? `${syncStatus.totalDeviceGroups} device group(s) across all users` : 'Manage access to all device groups'}
+            </p>
+          </div>
+          <div style="display: flex; gap: 10px; align-items: center;">
+            ${syncStatus && !syncStatus.allSynced ? '<span style="color: #f59e0b; font-size: 13px;">⚠️ Some admins missing access</span>' : ''}
+            <button id="syncAccessBtn" class="btn" style="background: linear-gradient(135deg, #10b981 0%, #059669 100%);">
+              🔄 Sync Admin Access
+            </button>
+          </div>
+        </div>
+      `;
+      
+      // Try to get devices
       const response = await API.getDevices();
       const devicesByUser = response.devicesByUser || [];
       
       if (devicesByUser.length === 0) {
-        elements.devicesList().innerHTML = '<p class="empty-state">No devices found.</p>';
-        return;
-      }
-      
-      let html = '';
-      for (const userDevices of devicesByUser) {
-        html += `<div class="user-devices-group">`;
-        html += `<div class="group-title">
-          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
-          ${escapeHtml(userDevices.userId)}
-          <span class="device-count">${userDevices.meshes?.length || 0} device group(s)</span>
-        </div>`;
-        
-        html += '<div class="meshes-list">';
-        for (const mesh of (userDevices.meshes || [])) {
-          html += `
-            <div class="mesh-item">
-              <div class="mesh-title">${escapeHtml(mesh.name)}</div>
-              <div class="mesh-info">${mesh.deviceCount || 0} device(s)</div>
-            </div>
-          `;
+        html += `
+          <div style="text-align: center; padding: 40px; background: #f0f9ff; border-radius: 12px; border: 1px solid #bae6fd;">
+            <div style="font-size: 48px; margin-bottom: 16px;">🖥️</div>
+            <h3 style="margin: 0 0 8px 0; color: #0c4a6e;">No Device Groups Found</h3>
+            <p style="margin: 0 0 20px 0; color: #475569;">
+              Click "Sync Admin Access" to grant yourself access to all existing device groups,<br>
+              or visit the MeshCentral dashboard to view devices directly.
+            </p>
+            <a href="/" class="btn" style="display: inline-block; margin-top: 10px;">
+              Open MeshCentral Dashboard →
+            </a>
+          </div>
+        `;
+      } else {
+        // Show devices by user
+        for (const userDevices of devicesByUser) {
+          html += `<div class="user-devices-group">`;
+          html += `<div class="group-title">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
+            ${escapeHtml(userDevices.userName || userDevices.userId)}
+            <span class="device-count">${userDevices.meshes?.length || 0} device group(s), ${userDevices.deviceCount || 0} device(s)</span>
+          </div>`;
+          
+          html += '<div class="meshes-list">';
+          for (const mesh of (userDevices.meshes || [])) {
+            const deviceCount = mesh.devices?.length || 0;
+            const onlineCount = (mesh.devices || []).filter(d => d.conn && d.conn > 0).length;
+            
+            html += `
+              <div class="mesh-item" style="display: flex; justify-content: space-between; align-items: center; padding: 12px; background: white; border-radius: 8px; margin-bottom: 8px; border: 1px solid #e2e8f0;">
+                <div>
+                  <div class="mesh-title" style="font-weight: 600; color: #1e293b;">${escapeHtml(mesh.name)}</div>
+                  <div class="mesh-info" style="font-size: 13px; color: #64748b;">${deviceCount} device(s)</div>
+                </div>
+                <div style="display: flex; align-items: center; gap: 8px;">
+                  <span style="display: inline-flex; align-items: center; padding: 4px 10px; background: ${onlineCount > 0 ? '#dcfce7' : '#f1f5f9'}; color: ${onlineCount > 0 ? '#166534' : '#64748b'}; border-radius: 20px; font-size: 12px; font-weight: 500;">
+                    ${onlineCount > 0 ? '🟢' : '⚪'} ${onlineCount} online
+                  </span>
+                </div>
+              </div>
+            `;
+          }
+          html += '</div></div>';
         }
-        html += '</div></div>';
       }
       
       elements.devicesList().innerHTML = html;
+      
+      // Attach sync button handler
+      document.getElementById('syncAccessBtn')?.addEventListener('click', handleSyncAdminAccess);
+      
     } catch (error) {
       console.error('Failed to load devices:', error);
-      elements.devicesList().innerHTML = `<p class="error-state">Failed to load devices: ${error.message}</p>`;
+      elements.devicesList().innerHTML = `
+        <div style="text-align: center; padding: 40px; background: #fef2f2; border-radius: 12px; border: 1px solid #fecaca;">
+          <div style="font-size: 48px; margin-bottom: 16px;">⚠️</div>
+          <h3 style="margin: 0 0 8px 0; color: #991b1b;">Failed to Load Devices</h3>
+          <p style="margin: 0 0 20px 0; color: #dc2626;">${escapeHtml(error.message)}</p>
+          <p style="margin: 0 0 20px 0; color: #475569;">
+            This may happen if admin access hasn't been synced yet.<br>
+            Click the button below to grant admin access to all device groups.
+          </p>
+          <button id="syncAccessBtn" class="btn" style="background: linear-gradient(135deg, #10b981 0%, #059669 100%);">
+            🔄 Sync Admin Access
+          </button>
+          <a href="/" class="btn" style="display: inline-block; margin-left: 10px;">
+            Open MeshCentral Dashboard
+          </a>
+        </div>
+      `;
+      
+      // Attach sync button handler for error state too
+      document.getElementById('syncAccessBtn')?.addEventListener('click', handleSyncAdminAccess);
+    }
+  }
+  
+  /**
+   * Handle sync admin access button click
+   */
+  async function handleSyncAdminAccess() {
+    const btn = document.getElementById('syncAccessBtn');
+    if (!btn) return;
+    
+    const confirmed = await UI.confirm(
+      'Sync Admin Access',
+      'This will grant all site administrators access to all device groups. This allows admins to view and manage all devices across all users. Continue?'
+    );
+    
+    if (!confirmed) return;
+    
+    try {
+      btn.disabled = true;
+      btn.innerHTML = '⏳ Syncing...';
+      
+      const result = await API.syncAdminAccess();
+      
+      if (result.success) {
+        UI.showSuccess(result.message);
+        
+        // Reload the devices panel after a brief delay
+        // (MeshCentral may need a moment to pick up the changes)
+        setTimeout(() => {
+          loadAdminDevices();
+        }, 1000);
+      } else {
+        UI.showError('Sync failed: ' + (result.error || 'Unknown error'));
+        btn.disabled = false;
+        btn.innerHTML = '🔄 Sync Admin Access';
+      }
+    } catch (error) {
+      console.error('Sync failed:', error);
+      UI.showError('Sync failed: ' + error.message);
+      btn.disabled = false;
+      btn.innerHTML = '🔄 Sync Admin Access';
     }
   }
   
@@ -923,6 +1038,7 @@ const App = (function() {
     deleteMyFile,
     copyFileLink,
     toggleFileVisibility,
+    syncAdminAccess: handleSyncAdminAccess,
     viewUserSettings: (userId) => {
       console.log('View user settings:', userId);
       // Could open a modal or navigate to user detail view

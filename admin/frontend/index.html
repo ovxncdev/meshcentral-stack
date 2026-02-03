@@ -125,7 +125,7 @@
                     <span></span>
                 </button>
                 
-                <h1 class="header-title" id="pageTitle">My Settings</h1>
+                <h1 class="page-title" id="pageTitle">Dashboard</h1>
                 
                 <div class="header-actions">
                     <button class="btn btn-icon" id="refreshBtn" title="Refresh">
@@ -190,6 +190,39 @@
                         <button type="submit" class="btn btn-primary" id="saveBtn" form="settingsForm">
                             💾 Save Settings
                         </button>
+                    </div>
+                </div>
+
+                <!-- My Files Panel (User's own files with upload) -->
+                <div class="admin-panel" id="myFilesPanel" style="display: none;">
+                    <div class="panel-header">
+                        <h2 class="panel-title">My Files</h2>
+                        <p class="panel-description">Upload and manage your shared files</p>
+                    </div>
+                    
+                    <!-- Upload Area -->
+                    <div class="upload-area" id="uploadArea">
+                        <div class="upload-dropzone" id="uploadDropzone">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                            <p>Drag & drop files here or click to browse</p>
+                            <input type="file" id="fileInput" multiple style="display: none;">
+                        </div>
+                        <div class="upload-options">
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="uploadPublic"> Make file public (shareable link)
+                            </label>
+                        </div>
+                        <div class="upload-progress" id="uploadProgress" style="display: none;">
+                            <div class="progress-bar">
+                                <div class="progress-fill" id="progressFill"></div>
+                            </div>
+                            <span class="progress-text" id="progressText">Uploading...</span>
+                        </div>
+                    </div>
+                    
+                    <!-- Files List -->
+                    <div class="my-files-list" id="myFilesList">
+                        <!-- Files will be loaded here -->
                     </div>
                 </div>
 

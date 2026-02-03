@@ -2,18 +2,15 @@
  * UI Utilities
  * 
  * Helper functions for building the dashboard UI:
- * - Form generation from schema
+ * - Form generation from schema (supports both old array and new object formats)
  * - Toast notifications
  * - Modal dialogs
  * - Loading states
- * - File Manager
- * 
- * Works in Docker and non-Docker environments with graceful fallbacks.
  */
 
 const UI = (function() {
   // ==============================================================================
-  // SVG Icon Mapping (Single Source of Truth)
+  // SVG Icon Mapping
   // ==============================================================================
   
   const ICONS = {
@@ -39,6 +36,7 @@ const UI = (function() {
     'save': '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>',
     'test': '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg>',
     'zap': '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>',
+    'check': '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>',
     
     // Status
     'success': '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>',
@@ -53,14 +51,12 @@ const UI = (function() {
     'chevron-right': '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>',
     'external-link': '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>',
     
-    // Default fallback
+    // Default
     'default': '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path></svg>'
   };
   
   /**
-   * Get icon SVG by name with fallback
-   * @param {string} name - Icon name
-   * @returns {string} SVG string
+   * Get icon for a given name
    */
   function getIcon(name) {
     return ICONS[name] || ICONS['default'];
@@ -70,19 +66,9 @@ const UI = (function() {
   // Toast Notifications
   // ==============================================================================
   
-  /**
-   * Show a toast notification
-   * @param {string} message - Message to display
-   * @param {string} type - Type: success, error, warning, info
-   * @param {number} duration - Duration in ms (0 = permanent)
-   */
   function toast(message, type = 'info', duration = 4000) {
     const container = document.getElementById('toastContainer');
-    if (!container) {
-      // Fallback to console if no toast container
-      console.log(`[${type.toUpperCase()}] ${message}`);
-      return null;
-    }
+    if (!container) return;
     
     const toastEl = document.createElement('div');
     toastEl.className = `toast ${type}`;
@@ -107,7 +93,6 @@ const UI = (function() {
     return toastEl;
   }
   
-  // Toast shortcuts
   const showSuccess = (msg) => toast(msg, 'success');
   const showError = (msg) => toast(msg, 'error', 6000);
   const showWarning = (msg) => toast(msg, 'warning');
@@ -117,12 +102,6 @@ const UI = (function() {
   // Modal Dialogs
   // ==============================================================================
   
-  /**
-   * Show confirmation dialog with fallback
-   * @param {string} message - Message to display
-   * @param {string} title - Dialog title
-   * @returns {Promise<boolean>} User's choice
-   */
   function confirm(message, title = 'Confirm') {
     return new Promise((resolve) => {
       const modal = document.getElementById('confirmModal');
@@ -131,8 +110,7 @@ const UI = (function() {
       const okBtn = document.getElementById('confirmOk');
       const cancelBtn = document.getElementById('confirmCancel');
       
-      // Fallback to native confirm if modal elements don't exist
-      if (!modal || !titleEl || !messageEl || !okBtn || !cancelBtn) {
+      if (!modal) {
         resolve(window.confirm(message));
         return;
       }
@@ -156,66 +134,128 @@ const UI = (function() {
   }
   
   // ==============================================================================
-  // Form Generation
+  // Form Generation - Supports BOTH old array AND new object schema formats
   // ==============================================================================
   
   /**
    * Generate form HTML from schema
-   * @param {Array} schema - Field schema array
+   * @param {Array|object} schema - Field schema (array for old, object with properties for new)
    * @param {object} values - Current values
    * @returns {string} Form HTML
    */
   function generateForm(schema, values = {}) {
-    if (!Array.isArray(schema)) {
-      console.warn('generateForm: schema is not an array', schema);
-      return '<p class="text-muted">No schema available</p>';
-    }
+    if (!schema) return '<p class="text-muted">No configuration available</p>';
     
+    // Detect schema format
+    if (Array.isArray(schema)) {
+      // Old array-based format
+      return generateFormFromArray(schema, values);
+    } else if (schema.properties) {
+      // New object-based format
+      return generateFormFromObject(schema, values);
+    } else {
+      return '<p class="text-muted">Invalid schema format</p>';
+    }
+  }
+  
+  /**
+   * Generate form from array-based schema (old format)
+   */
+  function generateFormFromArray(schema, values) {
     let html = '';
     let currentSection = null;
     
     for (const field of schema) {
-      if (!field || !field.type) continue;
-      
-      // Handle sections
       if (field.type === 'section') {
-        if (currentSection) {
-          html += '</div>'; // Close previous section
-        }
-        html += `
-          <div class="form-section">
-            <h3 class="form-section-title">${escapeHtml(field.label || '')}</h3>
-        `;
+        if (currentSection) html += '</div>';
+        html += `<div class="form-section"><h3 class="form-section-title">${escapeHtml(field.label)}</h3>`;
         currentSection = field.key;
         continue;
       }
       
-      // Handle dividers
       if (field.type === 'divider') {
         html += `<hr class="form-divider">`;
         if (field.label) {
-          html += `<h4 class="form-section-title" style="font-size: 14px; margin-top: 8px;">${escapeHtml(field.label)}</h4>`;
+          html += `<h4 class="form-subsection-title">${escapeHtml(field.label)}</h4>`;
         }
         continue;
       }
       
-      // Generate field
       html += generateField(field, values[field.key]);
     }
     
-    // Close last section
-    if (currentSection) {
-      html += '</div>';
+    if (currentSection) html += '</div>';
+    return html;
+  }
+  
+  /**
+   * Generate form from object-based schema (new format)
+   */
+  function generateFormFromObject(schema, values) {
+    let html = '';
+    const properties = schema.properties || {};
+    const sections = schema.sections || [];
+    
+    // If sections are defined, group by sections
+    if (sections.length > 0) {
+      for (const section of sections) {
+        html += `<div class="form-section"><h3 class="form-section-title">${escapeHtml(section.title)}</h3>`;
+        
+        for (const fieldKey of section.fields || []) {
+          const fieldSchema = properties[fieldKey];
+          if (fieldSchema) {
+            const field = { key: fieldKey, ...normalizeFieldSchema(fieldSchema) };
+            html += generateField(field, values[fieldKey]);
+          }
+        }
+        
+        html += '</div>';
+      }
+      
+      // Render any remaining fields not in sections
+      const sectionFields = new Set(sections.flatMap(s => s.fields || []));
+      for (const [key, fieldSchema] of Object.entries(properties)) {
+        if (!sectionFields.has(key)) {
+          const field = { key, ...normalizeFieldSchema(fieldSchema) };
+          html += generateField(field, values[key]);
+        }
+      }
+    } else {
+      // No sections, render all fields
+      for (const [key, fieldSchema] of Object.entries(properties)) {
+        const field = { key, ...normalizeFieldSchema(fieldSchema) };
+        html += generateField(field, values[key]);
+      }
     }
     
     return html;
   }
   
   /**
+   * Normalize new schema field format to old format for generateField
+   */
+  function normalizeFieldSchema(fieldSchema) {
+    return {
+      type: fieldSchema.type === 'string' ? 'text' : fieldSchema.type,
+      label: fieldSchema.title || fieldSchema.label,
+      description: fieldSchema.description,
+      placeholder: fieldSchema.placeholder,
+      required: fieldSchema.required,
+      default: fieldSchema.default,
+      options: fieldSchema.options,
+      dependsOn: fieldSchema.dependsOn,
+      format: fieldSchema.format,
+      minimum: fieldSchema.minimum,
+      maximum: fieldSchema.maximum,
+      validation: {
+        min: fieldSchema.minimum,
+        max: fieldSchema.maximum
+      }
+    };
+  }
+  
+  /**
    * Generate a single form field
-   * @param {object} field - Field schema
-   * @param {any} value - Current value
-   * @returns {string} Field HTML
    */
   function generateField(field, value) {
     const {
@@ -226,20 +266,22 @@ const UI = (function() {
       placeholder,
       required,
       options,
-      dependsOn
+      dependsOn,
+      format
     } = field;
     
-    // Set default value
     if (value === undefined || value === null) {
       value = field.default !== undefined ? field.default : '';
     }
     
-    // Data attributes for dependencies
     const dataAttrs = dependsOn ? `data-depends-on="${dependsOn}"` : '';
-    
     let html = `<div class="form-group" ${dataAttrs}>`;
     
-    switch (type) {
+    // Handle color format for string type
+    const effectiveType = format === 'color' ? 'color' : 
+                          format === 'textarea' ? 'textarea' : type;
+    
+    switch (effectiveType) {
       case 'boolean':
         html += `
           <div class="form-toggle">
@@ -248,7 +290,7 @@ const UI = (function() {
               <span class="toggle-slider"></span>
             </label>
             <div>
-              <span class="toggle-label">${escapeHtml(label || '')}</span>
+              <span class="toggle-label">${escapeHtml(label || key)}</span>
               ${description ? `<p class="form-description">${escapeHtml(description)}</p>` : ''}
             </div>
           </div>
@@ -257,7 +299,7 @@ const UI = (function() {
         
       case 'select':
         html += `
-          <label class="form-label">${escapeHtml(label || '')}${required ? ' *' : ''}</label>
+          <label class="form-label">${escapeHtml(label || key)}${required ? ' *' : ''}</label>
           ${description ? `<p class="form-description">${escapeHtml(description)}</p>` : ''}
           <select class="form-select" name="${key}" ${required ? 'required' : ''}>
             ${(options || []).map(opt => `
@@ -271,7 +313,7 @@ const UI = (function() {
         
       case 'textarea':
         html += `
-          <label class="form-label">${escapeHtml(label || '')}${required ? ' *' : ''}</label>
+          <label class="form-label">${escapeHtml(label || key)}${required ? ' *' : ''}</label>
           ${description ? `<p class="form-description">${escapeHtml(description)}</p>` : ''}
           <textarea 
             class="form-textarea" 
@@ -284,7 +326,7 @@ const UI = (function() {
         
       case 'password':
         html += `
-          <label class="form-label">${escapeHtml(label || '')}${required ? ' *' : ''}</label>
+          <label class="form-label">${escapeHtml(label || key)}${required ? ' *' : ''}</label>
           ${description ? `<p class="form-description">${escapeHtml(description)}</p>` : ''}
           <input 
             type="password" 
@@ -300,7 +342,7 @@ const UI = (function() {
         
       case 'number':
         html += `
-          <label class="form-label">${escapeHtml(label || '')}${required ? ' *' : ''}</label>
+          <label class="form-label">${escapeHtml(label || key)}${required ? ' *' : ''}</label>
           ${description ? `<p class="form-description">${escapeHtml(description)}</p>` : ''}
           <input 
             type="number" 
@@ -317,7 +359,7 @@ const UI = (function() {
         
       case 'color':
         html += `
-          <label class="form-label">${escapeHtml(label || '')}${required ? ' *' : ''}</label>
+          <label class="form-label">${escapeHtml(label || key)}${required ? ' *' : ''}</label>
           ${description ? `<p class="form-description">${escapeHtml(description)}</p>` : ''}
           <input 
             type="color" 
@@ -328,69 +370,26 @@ const UI = (function() {
         `;
         break;
         
-      case 'time':
+      case 'array':
+        // For arrays, show as JSON for now (could be enhanced)
+        const arrayValue = Array.isArray(value) ? JSON.stringify(value, null, 2) : '';
         html += `
-          <label class="form-label">${escapeHtml(label || '')}${required ? ' *' : ''}</label>
+          <label class="form-label">${escapeHtml(label || key)}${required ? ' *' : ''}</label>
           ${description ? `<p class="form-description">${escapeHtml(description)}</p>` : ''}
-          <input 
-            type="time" 
-            class="form-input" 
+          <textarea 
+            class="form-textarea" 
             name="${key}" 
-            value="${escapeHtml(value)}"
-            ${required ? 'required' : ''}
-          >
+            placeholder="JSON array"
+            data-type="array"
+          >${escapeHtml(arrayValue)}</textarea>
         `;
-        break;
-        
-      case 'readonly':
-        html += `
-          <label class="form-label">${escapeHtml(label || '')}</label>
-          ${description ? `<p class="form-description">${escapeHtml(description)}</p>` : ''}
-          <input 
-            type="text" 
-            class="form-input" 
-            value="${escapeHtml(field.value || value)}"
-            readonly
-            style="background: var(--color-bg); cursor: not-allowed;"
-          >
-        `;
-        break;
-      
-      case 'filelist':
-        html += `
-          <label class="form-label">${escapeHtml(label || '')}</label>
-          ${description ? `<p class="form-description">${escapeHtml(description)}</p>` : ''}
-          <div class="file-list-container" id="fileListContainer">
-            <div class="file-upload-area" id="fileUploadArea">
-              <input type="file" id="fileInput" style="display: none;">
-              <div class="upload-dropzone" id="uploadDropzone">
-                <span class="upload-icon">${getIcon('upload')}</span>
-                <p>Drag & drop files here or <button type="button" class="btn-link" onclick="document.getElementById('fileInput').click()">browse</button></p>
-              </div>
-              <div class="upload-options" style="margin-top: 10px;">
-                <input type="text" id="customFileName" class="form-input" placeholder="Custom filename (optional)" style="flex: 1;">
-                <button type="button" class="btn btn-primary btn-sm" id="uploadBtn" onclick="FileManager.uploadFile()">
-                  ${getIcon('upload')} Upload
-                </button>
-              </div>
-            </div>
-            <div class="file-list" id="fileList">
-              <p class="text-muted">Loading files...</p>
-            </div>
-          </div>
-        `;
-        // Initialize file list after DOM is ready
-        setTimeout(() => {
-          if (typeof FileManager !== 'undefined' && FileManager.init) {
-            FileManager.init();
-          }
-        }, 100);
         break;
         
       case 'text':
+      case 'string':
       default:
         html += `
-          <label class="form-label">${escapeHtml(label || '')}${required ? ' *' : ''}</label>
+          <label class="form-label">${escapeHtml(label || key)}${required ? ' *' : ''}</label>
           ${description ? `<p class="form-description">${escapeHtml(description)}</p>` : ''}
           <input 
             type="text" 
@@ -410,28 +409,26 @@ const UI = (function() {
   
   /**
    * Get form values as object
-   * @param {HTMLFormElement} form - Form element
-   * @param {Array} schema - Field schema for type conversion
-   * @returns {object} Form values
    */
-  function getFormValues(form, schema = []) {
-    if (!form) return {};
-    
+  function getFormValues(form, schema) {
     const formData = new FormData(form);
     const values = {};
     
-    // Create a map of field types from schema
+    // Build field types map
     const fieldTypes = {};
-    for (const field of schema) {
-      if (field.key && field.type) {
-        fieldTypes[field.key] = field.type;
+    if (Array.isArray(schema)) {
+      for (const field of schema) {
+        if (field.key && field.type) fieldTypes[field.key] = field.type;
+      }
+    } else if (schema?.properties) {
+      for (const [key, prop] of Object.entries(schema.properties)) {
+        fieldTypes[key] = prop.type;
       }
     }
     
     // Process form data
     for (const [key, value] of formData.entries()) {
       const type = fieldTypes[key];
-      
       if (type === 'number') {
         values[key] = value === '' ? null : Number(value);
       } else {
@@ -439,26 +436,31 @@ const UI = (function() {
       }
     }
     
-    // Handle checkboxes (not included in FormData when unchecked)
-    for (const field of schema) {
-      if (field.type === 'boolean') {
-        const checkbox = form.querySelector(`[name="${field.key}"]`);
-        if (checkbox) {
-          values[field.key] = checkbox.checked;
+    // Handle checkboxes (boolean)
+    const checkboxes = form.querySelectorAll('input[type="checkbox"]');
+    checkboxes.forEach(cb => {
+      if (cb.name) values[cb.name] = cb.checked;
+    });
+    
+    // Handle array fields
+    const arrayFields = form.querySelectorAll('[data-type="array"]');
+    arrayFields.forEach(field => {
+      if (field.name) {
+        try {
+          values[field.name] = JSON.parse(field.value || '[]');
+        } catch (e) {
+          values[field.name] = [];
         }
       }
-    }
+    });
     
     return values;
   }
   
   /**
    * Setup form field dependencies
-   * @param {HTMLFormElement} form - Form element
    */
   function setupDependencies(form) {
-    if (!form) return;
-    
     const updateVisibility = () => {
       const groups = form.querySelectorAll('[data-depends-on]');
       
@@ -473,10 +475,7 @@ const UI = (function() {
       }
     };
     
-    // Initial update
     updateVisibility();
-    
-    // Listen for changes
     form.addEventListener('change', updateVisibility);
   }
   
@@ -486,92 +485,51 @@ const UI = (function() {
   
   /**
    * Generate action buttons HTML
-   * @param {Array} actions - Action definitions
+   * @param {Array} actions - Action definitions (supports both old and new format)
    * @param {string} moduleName - Module name
-   * @returns {string} Buttons HTML
    */
   function generateActionButtons(actions, moduleName) {
     if (!actions || actions.length === 0) {
-      return '<p class="text-muted">No actions available</p>';
+      return '';
     }
     
-    return actions.map(action => `
-      <button 
-        type="button" 
-        class="btn btn-secondary" 
-        data-module="${moduleName}"
-        data-action="${action.name}"
-        ${action.confirm ? `data-confirm="${escapeHtml(action.confirm)}"` : ''}
-        title="${escapeHtml(action.description || '')}"
-      >
-        ${getIcon(action.icon || 'play')}
-        <span>${escapeHtml(action.label)}</span>
-      </button>
-    `).join('');
-  }
-  
-  // ==============================================================================
-  // Module Cards
-  // ==============================================================================
-  
-  /**
-   * Generate module card HTML
-   * @param {object} module - Module data
-   * @returns {string} Card HTML
-   */
-  function generateModuleCard(module) {
-    return `
-      <div class="module-card" data-module="${module.name}">
-        <div class="module-card-icon">${getIcon(module.icon || 'default')}</div>
-        <div class="module-card-content">
-          <h3 class="module-card-title">${escapeHtml(module.displayName || module.name)}</h3>
-          <p class="module-card-description">${escapeHtml(module.description || '')}</p>
-        </div>
-        <div class="module-card-status">
-          <span class="status-dot ${module.enabled ? 'enabled' : ''}"></span>
-          <span>${module.enabled ? 'Enabled' : 'Disabled'}</span>
-        </div>
-      </div>
-    `;
-  }
-  
-  /**
-   * Generate navigation item HTML
-   * @param {object} module - Module data
-   * @returns {string} Nav item HTML
-   */
-  function generateNavItem(module) {
-    return `
-      <div class="nav-item" data-module="${module.name}">
-        <span class="nav-icon">${getIcon(module.icon || 'default')}</span>
-        <span class="nav-label">${escapeHtml(module.displayName || module.name)}</span>
-        ${module.enabled ? '<span class="nav-badge">ON</span>' : ''}
-      </div>
-    `;
+    return actions.map(action => {
+      const name = action.name;
+      const label = action.label || action.title || name;
+      const icon = action.icon || 'play';
+      const confirmMsg = action.confirm || '';
+      const description = action.description || '';
+      
+      return `
+        <button 
+          type="button" 
+          class="btn btn-secondary" 
+          data-module="${moduleName}"
+          data-action="${name}"
+          ${confirmMsg ? `data-confirm="${escapeHtml(confirmMsg)}"` : ''}
+          title="${escapeHtml(description)}"
+        >
+          ${getIcon(icon)} ${escapeHtml(label)}
+        </button>
+      `;
+    }).join('');
   }
   
   // ==============================================================================
   // Loading States
   // ==============================================================================
   
-  /**
-   * Show loading state on element
-   * @param {HTMLElement} element - Element to show loading on
-   * @param {boolean} loading - Loading state
-   */
   function setLoading(element, loading) {
-    if (!element) return;
-    
     if (loading) {
       element.classList.add('loading');
       element.disabled = true;
-      element.dataset.originalText = element.textContent;
+      element.dataset.originalHtml = element.innerHTML;
       element.textContent = 'Loading...';
     } else {
       element.classList.remove('loading');
       element.disabled = false;
-      if (element.dataset.originalText) {
-        element.textContent = element.dataset.originalText;
+      if (element.dataset.originalHtml) {
+        element.innerHTML = element.dataset.originalHtml;
       }
     }
   }
@@ -580,11 +538,6 @@ const UI = (function() {
   // Utilities
   // ==============================================================================
   
-  /**
-   * Escape HTML to prevent XSS
-   * @param {string} text - Text to escape
-   * @returns {string} Escaped text
-   */
   function escapeHtml(text) {
     if (text === null || text === undefined) return '';
     const div = document.createElement('div');
@@ -592,12 +545,6 @@ const UI = (function() {
     return div.innerHTML;
   }
   
-  /**
-   * Debounce function
-   * @param {Function} func - Function to debounce
-   * @param {number} wait - Wait time in ms
-   * @returns {Function} Debounced function
-   */
   function debounce(func, wait) {
     let timeout;
     return function executedFunction(...args) {
@@ -615,381 +562,25 @@ const UI = (function() {
   // ==============================================================================
   
   return {
-    // Icons
     getIcon,
-    
-    // Toasts
     toast,
     showSuccess,
     showError,
     showWarning,
     showInfo,
-    
-    // Modal
     confirm,
-    
-    // Forms
     generateForm,
     generateField,
     getFormValues,
     setupDependencies,
-    
-    // Actions
     generateActionButtons,
-    
-    // Modules
-    generateModuleCard,
-    generateNavItem,
-    
-    // Loading
     setLoading,
-    
-    // Utilities
     escapeHtml,
     debounce
   };
 })();
 
-// ==============================================================================
-// File Manager (Separate module for file hosting)
-// ==============================================================================
-
-const FileManager = (function() {
-  let files = [];
-  let initialized = false;
-  
-  /**
-   * Get API base URL - works in all environments
-   * @returns {string} Base URL for API calls
-   */
-  function getApiBaseUrl() {
-    // Try to use the API module if available
-    if (typeof API !== 'undefined' && typeof API.getBaseUrl === 'function') {
-      return API.getBaseUrl();
-    }
-    
-    // Fallback: detect from current location
-    const pathname = window.location.pathname;
-    
-    // If we're in /admin-settings/, use relative path
-    if (pathname.includes('/admin-settings')) {
-      return '/admin-settings/api';
-    }
-    
-    // Default fallback
-    return '/api';
-  }
-  
-  /**
-   * Initialize file manager
-   */
-  async function init() {
-    if (initialized) {
-      // Just reload files if already initialized
-      await loadFiles();
-      return;
-    }
-    
-    initialized = true;
-    await loadFiles();
-    setupDragDrop();
-  }
-  
-  /**
-   * Load files from API
-   */
-  async function loadFiles() {
-    const fileList = document.getElementById('fileList');
-    
-    try {
-      const response = await fetch(getApiBaseUrl() + '/files');
-      
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
-      
-      const data = await response.json();
-      
-      if (data.success) {
-        files = data.files || [];
-        renderFileList();
-      } else {
-        showFileListError(data.error || 'Failed to load files');
-      }
-    } catch (error) {
-      console.error('Failed to load files:', error);
-      showFileListError('Failed to load files: ' + error.message);
-    }
-  }
-  
-  /**
-   * Show error in file list
-   * @param {string} message - Error message
-   */
-  function showFileListError(message) {
-    const fileList = document.getElementById('fileList');
-    if (fileList) {
-      fileList.innerHTML = `<p class="text-error">${UI.escapeHtml(message)}</p>`;
-    }
-  }
-  
-  /**
-   * Render file list
-   */
-  function renderFileList() {
-    const fileList = document.getElementById('fileList');
-    if (!fileList) return;
-    
-    if (files.length === 0) {
-      fileList.innerHTML = '<p class="text-muted">No files uploaded yet</p>';
-      return;
-    }
-    
-    let html = '<table class="file-table"><thead><tr>';
-    html += '<th>Filename</th>';
-    html += '<th>Size</th>';
-    html += '<th>Downloads</th>';
-    html += '<th>Download Link</th>';
-    html += '<th>Actions</th>';
-    html += '</tr></thead><tbody>';
-    
-    for (const file of files) {
-      const size = formatFileSize(file.size);
-      const url = file.downloadUrl || '';
-      const exists = file.exists !== false;
-      
-      html += `<tr class="${exists ? '' : 'file-missing'}">`;
-      html += `<td><span class="file-icon">${UI.getIcon('file')}</span> ${UI.escapeHtml(file.filename)}</td>`;
-      html += `<td>${size}</td>`;
-      html += `<td>${file.downloads || 0}</td>`;
-      html += `<td class="download-link-cell">`;
-      if (exists && url) {
-        html += `<input type="text" value="${UI.escapeHtml(url)}" readonly class="form-input download-url" onclick="this.select()">`;
-        html += `<button type="button" class="btn btn-icon btn-sm" onclick="FileManager.copyUrl('${UI.escapeHtml(url)}')" title="Copy URL">${UI.getIcon('copy')}</button>`;
-      } else {
-        html += '<span class="text-muted">File missing</span>';
-      }
-      html += `</td>`;
-      html += `<td>`;
-      if (exists) {
-        html += `<a href="${UI.escapeHtml(url)}" class="btn btn-icon btn-sm" title="Download" target="_blank">${UI.getIcon('download')}</a>`;
-      }
-      html += `<button type="button" class="btn btn-icon btn-sm btn-danger" onclick="FileManager.deleteFile('${file.id}')" title="Delete">${UI.getIcon('trash')}</button>`;
-      html += `</td>`;
-      html += `</tr>`;
-    }
-    
-    html += '</tbody></table>';
-    fileList.innerHTML = html;
-  }
-  
-  /**
-   * Setup drag and drop handlers
-   */
-  function setupDragDrop() {
-    const dropzone = document.getElementById('uploadDropzone');
-    const fileInput = document.getElementById('fileInput');
-    
-    if (!dropzone || !fileInput) return;
-    
-    // Prevent default drag behaviors
-    ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
-      dropzone.addEventListener(eventName, preventDefaults, false);
-      document.body.addEventListener(eventName, preventDefaults, false);
-    });
-    
-    function preventDefaults(e) {
-      e.preventDefault();
-      e.stopPropagation();
-    }
-    
-    // Highlight on drag
-    ['dragenter', 'dragover'].forEach(eventName => {
-      dropzone.addEventListener(eventName, () => dropzone.classList.add('dragover'), false);
-    });
-    
-    ['dragleave', 'drop'].forEach(eventName => {
-      dropzone.addEventListener(eventName, () => dropzone.classList.remove('dragover'), false);
-    });
-    
-    // Handle drop
-    dropzone.addEventListener('drop', (e) => {
-      const dt = e.dataTransfer;
-      const droppedFiles = dt.files;
-      
-      if (droppedFiles.length > 0) {
-        fileInput.files = droppedFiles;
-        uploadFile();
-      }
-    }, false);
-    
-    // Handle file input change
-    fileInput.addEventListener('change', () => {
-      if (fileInput.files && fileInput.files.length > 0) {
-        uploadFile();
-      }
-    });
-  }
-  
-  /**
-   * Upload a file
-   */
-  async function uploadFile() {
-    const fileInput = document.getElementById('fileInput');
-    const customNameInput = document.getElementById('customFileName');
-    const uploadBtn = document.getElementById('uploadBtn');
-    
-    if (!fileInput || !fileInput.files || fileInput.files.length === 0) {
-      UI.showWarning('Please select a file to upload');
-      return;
-    }
-    
-    const file = fileInput.files[0];
-    const customName = customNameInput ? customNameInput.value.trim() : '';
-    
-    // Create FormData
-    const formData = new FormData();
-    formData.append('file', file);
-    if (customName) {
-      formData.append('customName', customName);
-    }
-    
-    try {
-      // Show loading state
-      if (uploadBtn) {
-        uploadBtn.disabled = true;
-        uploadBtn.innerHTML = 'Uploading...';
-      }
-      
-      const response = await fetch(getApiBaseUrl() + '/files/upload', {
-        method: 'POST',
-        body: formData
-      });
-      
-      const data = await response.json();
-      
-      if (data.success) {
-        UI.showSuccess('File uploaded successfully');
-        
-        // Reset form
-        fileInput.value = '';
-        if (customNameInput) customNameInput.value = '';
-        
-        // Reload file list
-        await loadFiles();
-      } else {
-        UI.showError(data.error || 'Upload failed');
-      }
-    } catch (error) {
-      console.error('Upload error:', error);
-      UI.showError('Upload failed: ' + error.message);
-    } finally {
-      // Reset button
-      if (uploadBtn) {
-        uploadBtn.disabled = false;
-        uploadBtn.innerHTML = UI.getIcon('upload') + ' Upload';
-      }
-    }
-  }
-  
-  /**
-   * Delete a file
-   * @param {string} fileId - File ID to delete
-   */
-  async function deleteFile(fileId) {
-    const confirmed = await UI.confirm('Are you sure you want to delete this file?', 'Delete File');
-    if (!confirmed) return;
-    
-    try {
-      const response = await fetch(getApiBaseUrl() + '/files/' + fileId, {
-        method: 'DELETE'
-      });
-      
-      const data = await response.json();
-      
-      if (data.success) {
-        UI.showSuccess('File deleted');
-        await loadFiles();
-      } else {
-        UI.showError(data.error || 'Delete failed');
-      }
-    } catch (error) {
-      console.error('Delete error:', error);
-      UI.showError('Delete failed: ' + error.message);
-    }
-  }
-  
-  /**
-   * Copy URL to clipboard with fallback
-   * @param {string} url - URL to copy
-   */
-  async function copyUrl(url) {
-    try {
-      // Modern API
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        await navigator.clipboard.writeText(url);
-        UI.showSuccess('URL copied to clipboard');
-        return;
-      }
-      
-      // Fallback for older browsers and non-HTTPS
-      const textArea = document.createElement('textarea');
-      textArea.value = url;
-      textArea.style.position = 'fixed';
-      textArea.style.left = '-999999px';
-      textArea.style.top = '-999999px';
-      document.body.appendChild(textArea);
-      textArea.focus();
-      textArea.select();
-      
-      const successful = document.execCommand('copy');
-      document.body.removeChild(textArea);
-      
-      if (successful) {
-        UI.showSuccess('URL copied to clipboard');
-      } else {
-        throw new Error('execCommand failed');
-      }
-    } catch (error) {
-      console.error('Copy failed:', error);
-      // Final fallback - show the URL in a prompt
-      window.prompt('Copy this URL:', url);
-    }
-  }
-  
-  /**
-   * Format file size for display
-   * @param {number} bytes - Size in bytes
-   * @returns {string} Formatted size
-   */
-  function formatFileSize(bytes) {
-    if (!bytes || bytes === 0) return '0 B';
-    
-    const k = 1024;
-    const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-  }
-  
-  // ==============================================================================
-  // Public API
-  // ==============================================================================
-  
-  return {
-    init,
-    loadFiles,
-    uploadFile,
-    deleteFile,
-    copyUrl,
-    formatFileSize
-  };
-})();
-
-// ==============================================================================
-// Export for module systems (Node.js compatibility)
-// ==============================================================================
-
+// Export for module systems
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { UI, FileManager };
+  module.exports = UI;
 }

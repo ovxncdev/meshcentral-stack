@@ -183,6 +183,8 @@ services:
     volumes:
       # Persistent settings storage
       - ${DATA_PATH:-./data}/admin:/app/data
+      # MeshCentral database access for admin sync
+      - meshcentral_data:/opt/meshcentral/meshcentral-data
     
     networks:
       - internal

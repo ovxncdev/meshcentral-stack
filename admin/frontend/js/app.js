@@ -52,6 +52,16 @@ const App = (function() {
     modulePanelTitle: () => document.getElementById('modulePanelTitle'),
     modulePanelDescription: () => document.getElementById('modulePanelDescription'),
     
+    // My Files panel
+    myFilesPanel: () => document.getElementById('myFilesPanel'),
+    myFilesList: () => document.getElementById('myFilesList'),
+    uploadDropzone: () => document.getElementById('uploadDropzone'),
+    fileInput: () => document.getElementById('fileInput'),
+    uploadPublic: () => document.getElementById('uploadPublic'),
+    uploadProgress: () => document.getElementById('uploadProgress'),
+    progressFill: () => document.getElementById('progressFill'),
+    progressText: () => document.getElementById('progressText'),
+    
     // Admin panels
     adminUsersPanel: () => document.getElementById('adminUsersPanel'),
     adminDevicesPanel: () => document.getElementById('adminDevicesPanel'),
@@ -100,7 +110,11 @@ const App = (function() {
     elements.loadingScreen().style.display = 'none';
     elements.app().style.display = 'flex';
     
-    console.log('My Settings initialized');
+    // Handle hash navigation
+    handleHashChange();
+    window.addEventListener('hashchange', handleHashChange);
+    
+    console.log('My Settings initialized successfully');
   }
   
   /**
@@ -112,10 +126,24 @@ const App = (function() {
       
       if (response.authenticated && response.user) {
         user = response.user;
-        isAdmin = response.user.isAdmin === true;
+        isAdmin = user.isAdmin;
         
-        // Update UI with user info
-        updateUserInfo();
+        // Update UI
+        elements.userName().textContent = user.name || user.email || 'User';
+        elements.welcomeName().textContent = user.name || user.email || 'User';
+        
+        const roleEl = elements.userRole();
+        if (roleEl) {
+          roleEl.textContent = isAdmin ? 'Admin' : 'User';
+          roleEl.className = 'user-role' + (isAdmin ? ' admin' : '');
+        }
+        
+        // Show admin sections if admin
+        if (isAdmin) {
+          document.querySelectorAll('.admin-only').forEach(el => {
+            el.style.display = '';
+          });
+        }
         
         return true;
       }
@@ -128,32 +156,6 @@ const App = (function() {
   }
   
   /**
-   * Update user info in sidebar
-   */
-  function updateUserInfo() {
-    if (!user) return;
-    
-    // Set user name
-    elements.userName().textContent = user.name || user.email || 'User';
-    elements.welcomeName().textContent = user.name || 'User';
-    
-    // Set role badge
-    if (isAdmin) {
-      elements.userRole().textContent = 'Admin';
-      elements.userRole().className = 'user-role admin';
-    } else {
-      elements.userRole().textContent = 'User';
-      elements.userRole().className = 'user-role';
-    }
-    
-    // Show/hide admin sections
-    const adminElements = document.querySelectorAll('.admin-only');
-    adminElements.forEach(el => {
-      el.style.display = isAdmin ? '' : 'none';
-    });
-  }
-  
-  /**
    * Show login required screen
    */
   function showLoginRequired() {
@@ -163,20 +165,26 @@ const App = (function() {
   }
   
   /**
-   * Setup all event listeners
+   * Setup event listeners
    */
   function setupEventListeners() {
     // Menu toggle (mobile)
-    elements.menuToggle()?.addEventListener('click', toggleSidebar);
+    elements.menuToggle()?.addEventListener('click', () => {
+      elements.sidebar()?.classList.toggle('open');
+    });
     
     // Refresh button
-    elements.refreshBtn()?.addEventListener('click', handleRefresh);
+    elements.refreshBtn()?.addEventListener('click', () => {
+      const hash = window.location.hash.slice(1);
+      if (hash) {
+        loadModule(hash);
+      } else {
+        showDashboard();
+      }
+    });
     
-    // Export button (admin only)
-    elements.exportBtn()?.addEventListener('click', handleExport);
-    
-    // Save button / Form submit
-    elements.settingsForm()?.addEventListener('submit', handleSaveSettings);
+    // Form submit
+    elements.settingsForm()?.addEventListener('submit', handleFormSubmit);
     
     // Cancel button
     elements.cancelBtn()?.addEventListener('click', showDashboard);
@@ -190,6 +198,9 @@ const App = (function() {
     // Action button clicks (delegated)
     elements.panelActions()?.addEventListener('click', handleActionClick);
     
+    // File upload drag & drop
+    setupFileUpload();
+    
     // Close sidebar when clicking outside on mobile
     document.addEventListener('click', (e) => {
       const sidebar = elements.sidebar();
@@ -199,6 +210,46 @@ const App = (function() {
           !sidebar.contains(e.target) && 
           !menuToggle?.contains(e.target)) {
         sidebar.classList.remove('open');
+      }
+    });
+  }
+  
+  /**
+   * Setup file upload drag & drop
+   */
+  function setupFileUpload() {
+    const dropzone = elements.uploadDropzone();
+    const fileInput = elements.fileInput();
+    
+    if (!dropzone || !fileInput) return;
+    
+    // Click to browse
+    dropzone.addEventListener('click', () => fileInput.click());
+    
+    // File input change
+    fileInput.addEventListener('change', (e) => {
+      if (e.target.files?.length > 0) {
+        handleFileUpload(e.target.files);
+      }
+    });
+    
+    // Drag & drop events
+    dropzone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      dropzone.classList.add('dragover');
+    });
+    
+    dropzone.addEventListener('dragleave', (e) => {
+      e.preventDefault();
+      dropzone.classList.remove('dragover');
+    });
+    
+    dropzone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dropzone.classList.remove('dragover');
+      
+      if (e.dataTransfer?.files?.length > 0) {
+        handleFileUpload(e.dataTransfer.files);
       }
     });
   }
@@ -227,6 +278,12 @@ const App = (function() {
    */
   async function loadModule(moduleName) {
     try {
+      // Handle My Files specially
+      if (moduleName === 'files') {
+        await loadMyFiles();
+        return;
+      }
+      
       // Handle admin-specific modules
       if (moduleName.startsWith('admin-')) {
         await loadAdminPanel(moduleName);
@@ -266,6 +323,114 @@ const App = (function() {
     
     updateActiveNav(panelName);
     elements.sidebar()?.classList.remove('open');
+  }
+  
+  /**
+   * Load My Files panel (user's own files)
+   */
+  async function loadMyFiles() {
+    hideAllPanels();
+    
+    elements.pageTitle().textContent = 'My Files';
+    elements.myFilesPanel().style.display = 'block';
+    
+    try {
+      const response = await API.getMyFiles();
+      const files = response.files || [];
+      
+      renderMyFilesList(files);
+    } catch (error) {
+      console.error('Failed to load files:', error);
+      elements.myFilesList().innerHTML = `<p class="error-state">Failed to load files: ${error.message}</p>`;
+    }
+    
+    updateActiveNav('files');
+    elements.sidebar()?.classList.remove('open');
+  }
+  
+  /**
+   * Render user's files list
+   */
+  function renderMyFilesList(files) {
+    const container = elements.myFilesList();
+    
+    if (!files || files.length === 0) {
+      container.innerHTML = '<p class="empty-state">No files uploaded yet. Drag & drop files above to upload.</p>';
+      return;
+    }
+    
+    let html = '<table class="files-table"><thead><tr>';
+    html += '<th>Name</th><th>Size</th><th>Downloads</th><th>Visibility</th><th>Uploaded</th><th>Actions</th>';
+    html += '</tr></thead><tbody>';
+    
+    for (const file of files) {
+      const isPublic = file.isPublic ? 'Public' : 'Private';
+      const publicClass = file.isPublic ? 'enabled' : 'disabled';
+      
+      html += `
+        <tr>
+          <td>
+            <a href="${escapeHtml(file.downloadUrl || '#')}" target="_blank" title="Download">
+              ${escapeHtml(file.originalName || file.filename)}
+            </a>
+          </td>
+          <td>${formatFileSize(file.size)}</td>
+          <td>${file.downloads || 0}</td>
+          <td><span class="stat-value ${publicClass}">${isPublic}</span></td>
+          <td>${formatDate(file.uploadedAt)}</td>
+          <td>
+            <button class="btn btn-sm" onclick="App.copyFileLink('${escapeHtml(file.downloadUrl || '')}')">📋 Copy</button>
+            <button class="btn btn-sm" onclick="App.toggleFileVisibility('${escapeHtml(file.id)}', ${!file.isPublic})">${file.isPublic ? '🔒' : '🌐'}</button>
+            <button class="btn btn-sm btn-danger" onclick="App.deleteMyFile('${escapeHtml(file.id)}')">🗑️</button>
+          </td>
+        </tr>
+      `;
+    }
+    
+    html += '</tbody></table>';
+    container.innerHTML = html;
+  }
+  
+  /**
+   * Handle file upload
+   */
+  async function handleFileUpload(files) {
+    const progressEl = elements.uploadProgress();
+    const progressFill = elements.progressFill();
+    const progressText = elements.progressText();
+    const isPublic = elements.uploadPublic()?.checked || false;
+    
+    progressEl.style.display = 'block';
+    progressFill.style.width = '0%';
+    progressText.textContent = 'Uploading...';
+    
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      progressText.textContent = `Uploading ${file.name}... (${i + 1}/${files.length})`;
+      
+      try {
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('isPublic', isPublic.toString());
+        
+        await API.uploadFile(formData);
+        
+        progressFill.style.width = `${((i + 1) / files.length) * 100}%`;
+      } catch (error) {
+        console.error('Upload failed:', error);
+        UI.showError(`Failed to upload ${file.name}: ${error.message}`);
+      }
+    }
+    
+    progressText.textContent = 'Upload complete!';
+    setTimeout(() => {
+      progressEl.style.display = 'none';
+      // Refresh files list
+      loadMyFiles();
+    }, 1000);
+    
+    // Clear file input
+    elements.fileInput().value = '';
   }
   
   /**
@@ -332,7 +497,7 @@ const App = (function() {
     elements.adminDevicesPanel().style.display = 'block';
     
     try {
-      const response = await API.request('/admin/devices');
+      const response = await API.getDevices();
       const devicesByUser = response.devicesByUser || [];
       
       if (devicesByUser.length === 0) {
@@ -341,40 +506,23 @@ const App = (function() {
       }
       
       let html = '';
-      for (const userGroup of devicesByUser) {
-        html += `
-          <div class="user-devices-group">
-            <h3 class="group-title">
-              <span class="user-icon">👤</span>
-              ${escapeHtml(userGroup.userName || userGroup.userId)}
-              <span class="device-count">${userGroup.deviceCount} device(s)</span>
-            </h3>
-            <div class="meshes-list">
-        `;
+      for (const userDevices of devicesByUser) {
+        html += `<div class="user-devices-group">`;
+        html += `<div class="group-title">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
+          ${escapeHtml(userDevices.userId)}
+          <span class="device-count">${userDevices.meshes?.length || 0} device group(s)</span>
+        </div>`;
         
-        for (const mesh of userGroup.meshes) {
+        html += '<div class="meshes-list">';
+        for (const mesh of (userDevices.meshes || [])) {
           html += `
-            <div class="mesh-group">
-              <h4 class="mesh-title">${escapeHtml(mesh.name)}</h4>
-              <div class="devices-grid">
+            <div class="mesh-item">
+              <div class="mesh-title">${escapeHtml(mesh.name)}</div>
+              <div class="mesh-info">${mesh.deviceCount || 0} device(s)</div>
+            </div>
           `;
-          
-          for (const device of mesh.devices || []) {
-            const isOnline = device.conn && device.conn > 0;
-            html += `
-              <div class="device-card ${isOnline ? 'online' : 'offline'}">
-                <div class="device-status">${isOnline ? '🟢' : '🔴'}</div>
-                <div class="device-info">
-                  <h5>${escapeHtml(device.name)}</h5>
-                  <span class="device-ip">${escapeHtml(device.ip || 'N/A')}</span>
-                </div>
-              </div>
-            `;
-          }
-          
-          html += '</div></div>';
         }
-        
         html += '</div></div>';
       }
       
@@ -408,8 +556,8 @@ const App = (function() {
             <span class="stat-label">Total Size</span>
           </div>
           <div class="stat-box">
-            <span class="stat-number">${stats.totalDownloads || 0}</span>
-            <span class="stat-label">Total Downloads</span>
+            <span class="stat-number">${stats.publicFiles || 0}</span>
+            <span class="stat-label">Public</span>
           </div>
         </div>
       `;
@@ -430,14 +578,13 @@ const App = (function() {
       for (const file of files) {
         html += `
           <tr>
-            <td>${escapeHtml(file.originalName || file.filename)}</td>
-            <td>${escapeHtml(file.ownerName || file.ownerId)}</td>
+            <td><a href="${escapeHtml(file.downloadUrl || '#')}" target="_blank">${escapeHtml(file.originalName || file.filename)}</a></td>
+            <td>${escapeHtml(file.ownerName || file.ownerId || 'Unknown')}</td>
             <td>${formatFileSize(file.size)}</td>
             <td>${file.downloads || 0}</td>
             <td>${formatDate(file.uploadedAt)}</td>
             <td>
-              <a href="${file.downloadUrl}" class="btn btn-sm" target="_blank">Download</a>
-              <button class="btn btn-sm btn-danger" onclick="App.deleteFile('${file.id}')">Delete</button>
+              <button class="btn btn-sm btn-danger" onclick="App.deleteFile('${escapeHtml(file.id)}')">Delete</button>
             </td>
           </tr>
         `;
@@ -445,6 +592,7 @@ const App = (function() {
       
       html += '</tbody></table>';
       elements.allFilesList().innerHTML = html;
+      
     } catch (error) {
       console.error('Failed to load files:', error);
       elements.allFilesList().innerHTML = `<p class="error-state">Failed to load files: ${error.message}</p>`;
@@ -452,15 +600,16 @@ const App = (function() {
   }
   
   // ==============================================================================
-  // Rendering
+  // UI Helpers
   // ==============================================================================
   
   /**
-   * Hide all content panels
+   * Hide all panels
    */
   function hideAllPanels() {
     elements.dashboardHome().style.display = 'none';
     elements.modulePanel().style.display = 'none';
+    elements.myFilesPanel()?.style && (elements.myFilesPanel().style.display = 'none');
     elements.adminUsersPanel().style.display = 'none';
     elements.adminDevicesPanel().style.display = 'none';
     elements.adminFilesPanel().style.display = 'none';
@@ -521,15 +670,16 @@ const App = (function() {
    * @param {string|null} moduleName - Active module name
    */
   function updateActiveNav(moduleName) {
-    const navItems = document.querySelectorAll('.nav-item[data-module]');
-    
-    navItems.forEach(item => {
-      if (item.dataset.module === moduleName) {
-        item.classList.add('active');
-      } else {
-        item.classList.remove('active');
-      }
+    // Remove all active states
+    document.querySelectorAll('.nav-item').forEach(item => {
+      item.classList.remove('active');
     });
+    
+    // Add active state to current
+    if (moduleName) {
+      const activeItem = document.querySelector(`.nav-item[data-module="${moduleName}"]`);
+      activeItem?.classList.add('active');
+    }
   }
   
   // ==============================================================================
@@ -537,183 +687,199 @@ const App = (function() {
   // ==============================================================================
   
   /**
-   * Handle module card click
-   * @param {Event} e - Click event
+   * Handle module card clicks
    */
   function handleModuleCardClick(e) {
     const card = e.target.closest('.module-card');
-    if (card && card.dataset.module) {
-      loadModule(card.dataset.module);
+    if (!card) return;
+    
+    const moduleName = card.dataset.module;
+    if (moduleName) {
+      window.location.hash = moduleName;
     }
   }
   
   /**
-   * Handle navigation click
-   * @param {Event} e - Click event
+   * Handle navigation clicks
    */
   function handleNavClick(e) {
-    const navItem = e.target.closest('.nav-item[data-module]');
-    if (navItem && navItem.dataset.module) {
-      e.preventDefault();
-      loadModule(navItem.dataset.module);
+    const navItem = e.target.closest('.nav-item');
+    if (!navItem) return;
+    
+    // Don't prevent default for external links
+    if (navItem.href && !navItem.href.includes('#')) {
+      return;
+    }
+    
+    e.preventDefault();
+    
+    const moduleName = navItem.dataset.module;
+    if (moduleName) {
+      window.location.hash = moduleName;
+    } else {
+      window.location.hash = '';
+      showDashboard();
     }
   }
   
   /**
-   * Handle action button click
-   * @param {Event} e - Click event
+   * Handle hash changes
    */
-  async function handleActionClick(e) {
-    const button = e.target.closest('button[data-action]');
-    if (!button) return;
+  function handleHashChange() {
+    const hash = window.location.hash.slice(1);
     
-    const { module: moduleName, action: actionName, confirm: confirmMsg } = button.dataset;
-    
-    // Confirm if needed
-    if (confirmMsg) {
-      const confirmed = await UI.confirm(confirmMsg, 'Confirm Action');
-      if (!confirmed) return;
-    }
-    
-    // Execute action
-    try {
-      UI.setLoading(button, true);
-      
-      const result = await API.executeAction(moduleName, actionName);
-      
-      UI.showSuccess(result.message || 'Action completed successfully');
-      
-      // Reload module to get updated data
-      if (currentModule) {
-        await loadModule(currentModule.name);
-      }
-      
-    } catch (error) {
-      console.error('Action failed:', error);
-      UI.showError(error.message || 'Action failed');
-    } finally {
-      UI.setLoading(button, false);
+    if (hash) {
+      loadModule(hash);
+    } else {
+      showDashboard();
     }
   }
   
   /**
-   * Handle save settings
-   * @param {Event} e - Submit event
+   * Handle form submission
    */
-  async function handleSaveSettings(e) {
+  async function handleFormSubmit(e) {
     e.preventDefault();
     
     if (!currentModule) return;
     
     const form = elements.settingsForm();
-    const saveBtn = elements.saveBtn();
-    const values = UI.getFormValues(form, currentSchema);
+    const formData = new FormData(form);
+    const settings = {};
+    
+    // Convert FormData to object, handling checkboxes
+    for (const [key, value] of formData.entries()) {
+      settings[key] = value;
+    }
+    
+    // Handle unchecked checkboxes (they're not in FormData)
+    form.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+      if (!formData.has(cb.name)) {
+        settings[cb.name] = false;
+      } else {
+        settings[cb.name] = true;
+      }
+    });
+    
+    // Parse numeric values
+    form.querySelectorAll('input[type="number"]').forEach(input => {
+      if (settings[input.name] !== undefined) {
+        settings[input.name] = parseFloat(settings[input.name]) || 0;
+      }
+    });
     
     try {
-      UI.setLoading(saveBtn, true);
+      UI.setLoading(elements.saveBtn(), true);
       
-      await API.saveModuleSettings(currentModule.name, values);
+      await API.saveModuleSettings(currentModule.name, settings);
       
       UI.showSuccess('Settings saved successfully');
       
       // Reload module to get updated data
       await loadModule(currentModule.name);
-      
     } catch (error) {
-      console.error('Save failed:', error);
-      
-      if (error.data?.validationErrors) {
-        const errors = error.data.validationErrors;
-        const messages = errors.map(e => `${e.field}: ${e.message}`).join('\n');
-        UI.showError('Validation errors:\n' + messages);
-      } else {
-        UI.showError(error.message || 'Failed to save settings');
-      }
+      console.error('Failed to save settings:', error);
+      UI.showError('Failed to save settings: ' + error.message);
     } finally {
-      UI.setLoading(saveBtn, false);
+      UI.setLoading(elements.saveBtn(), false);
     }
   }
   
   /**
-   * Handle refresh
+   * Handle action button clicks
    */
-  async function handleRefresh() {
-    const btn = elements.refreshBtn();
+  async function handleActionClick(e) {
+    const btn = e.target.closest('.action-btn');
+    if (!btn) return;
+    
+    const action = btn.dataset.action;
+    const moduleName = btn.dataset.module;
+    
+    if (!action || !moduleName) return;
     
     try {
       UI.setLoading(btn, true);
       
-      await loadModules();
+      const result = await API.executeAction(moduleName, action);
       
-      if (currentModule) {
-        await loadModule(currentModule.name);
+      if (result.message) {
+        UI.showSuccess(result.message);
+      } else {
+        UI.showSuccess(`Action '${action}' completed successfully`);
       }
-      
-      UI.showSuccess('Refreshed');
     } catch (error) {
-      UI.showError('Refresh failed: ' + error.message);
+      console.error('Action failed:', error);
+      UI.showError('Action failed: ' + error.message);
     } finally {
       UI.setLoading(btn, false);
     }
   }
   
+  // ==============================================================================
+  // File Actions
+  // ==============================================================================
+  
   /**
-   * Handle export (admin only)
+   * Copy file link to clipboard
    */
-  async function handleExport() {
-    if (!isAdmin) {
-      UI.showError('Admin access required');
+  function copyFileLink(url) {
+    if (!url) {
+      UI.showError('No URL to copy');
       return;
     }
     
+    navigator.clipboard.writeText(url).then(() => {
+      UI.showSuccess('Link copied to clipboard');
+    }).catch(err => {
+      console.error('Copy failed:', err);
+      UI.showError('Failed to copy link');
+    });
+  }
+  
+  /**
+   * Toggle file visibility
+   */
+  async function toggleFileVisibility(fileId, makePublic) {
     try {
-      const response = await fetch(API.getBaseUrl() + '/admin/export', {
-        credentials: 'include'
-      });
-      const blob = await response.blob();
-      
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `settings-export-${Date.now()}.json`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-      
-      UI.showSuccess('Settings exported');
+      await API.updateFile(fileId, { isPublic: makePublic });
+      UI.showSuccess(makePublic ? 'File is now public' : 'File is now private');
+      loadMyFiles();
     } catch (error) {
-      UI.showError('Export failed: ' + error.message);
+      console.error('Failed to update file:', error);
+      UI.showError('Failed to update file: ' + error.message);
     }
   }
   
   /**
-   * Toggle sidebar (mobile)
+   * Delete user's own file
    */
-  function toggleSidebar() {
-    elements.sidebar()?.classList.toggle('open');
+  async function deleteMyFile(fileId) {
+    const confirmed = await UI.confirm('Delete File', 'Are you sure you want to delete this file?');
+    if (!confirmed) return;
+    
+    try {
+      await API.deleteFile(fileId);
+      UI.showSuccess('File deleted');
+      loadMyFiles();
+    } catch (error) {
+      console.error('Failed to delete file:', error);
+      UI.showError('Failed to delete file: ' + error.message);
+    }
   }
   
   /**
-   * View a specific user's settings (admin)
-   */
-  async function viewUserSettings(userId) {
-    // TODO: Implement user settings modal
-    UI.showInfo(`Viewing settings for ${userId} - Coming soon`);
-  }
-  
-  /**
-   * Delete a file (admin)
+   * Delete file (admin)
    */
   async function deleteFile(fileId) {
-    const confirmed = await UI.confirm('Are you sure you want to delete this file?', 'Delete File');
+    const confirmed = await UI.confirm('Delete File', 'Are you sure you want to delete this file?');
     if (!confirmed) return;
     
     try {
       await API.request(`/files/${fileId}`, { method: 'DELETE' });
       UI.showSuccess('File deleted');
-      await loadAdminFiles();
+      loadAdminFiles();
     } catch (error) {
+      console.error('Failed to delete file:', error);
       UI.showError('Failed to delete file: ' + error.message);
     }
   }
@@ -730,20 +896,19 @@ const App = (function() {
   }
   
   function formatFileSize(bytes) {
-    if (!bytes) return '0 B';
+    if (!bytes || bytes === 0) return '0 B';
     const units = ['B', 'KB', 'MB', 'GB'];
-    let i = 0;
-    while (bytes >= 1024 && i < units.length - 1) {
-      bytes /= 1024;
-      i++;
-    }
-    return `${bytes.toFixed(1)} ${units[i]}`;
+    const i = Math.floor(Math.log(bytes) / Math.log(1024));
+    return (bytes / Math.pow(1024, i)).toFixed(i > 0 ? 1 : 0) + ' ' + units[i];
   }
   
   function formatDate(dateStr) {
-    if (!dateStr) return 'N/A';
-    const date = new Date(dateStr);
-    return date.toLocaleDateString() + ' ' + date.toLocaleTimeString();
+    if (!dateStr) return '-';
+    try {
+      return new Date(dateStr).toLocaleDateString();
+    } catch {
+      return dateStr;
+    }
   }
   
   // ==============================================================================
@@ -752,21 +917,18 @@ const App = (function() {
   
   return {
     init,
-    loadModules,
     loadModule,
     showDashboard,
-    viewUserSettings,
     deleteFile,
-    
-    // Expose for debugging
-    getState: () => ({ user, isAdmin, modules, currentModule, currentSchema })
+    deleteMyFile,
+    copyFileLink,
+    toggleFileVisibility,
+    viewUserSettings: (userId) => {
+      console.log('View user settings:', userId);
+      // Could open a modal or navigate to user detail view
+    }
   };
 })();
 
-// ==============================================================================
 // Initialize on DOM ready
-// ==============================================================================
-
-document.addEventListener('DOMContentLoaded', () => {
-  App.init();
-});
+document.addEventListener('DOMContentLoaded', () => App.init());

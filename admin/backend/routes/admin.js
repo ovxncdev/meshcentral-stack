@@ -574,6 +574,10 @@ router.post('/sync-access', async (req, res) => {
       db.find(query, (err, docs) => err ? reject(err) : resolve(docs));
     });
     
+    const dbFindOne = (query) => new Promise((resolve, reject) => {
+      db.findOne(query, (err, doc) => err ? reject(err) : resolve(doc));
+    });
+    
     const dbUpdate = (query, update) => new Promise((resolve, reject) => {
       db.update(query, update, {}, (err, num) => err ? reject(err) : resolve(num));
     });
@@ -597,22 +601,30 @@ router.post('/sync-access', async (req, res) => {
       for (const mesh of meshes) {
         const meshId = mesh._id;
         
-        // Check if admin already has access to this mesh
-        const hasAccess = admin.links && admin.links[meshId];
+        // Re-fetch admin to get current links (in case we just updated)
+        const currentAdmin = await dbFindOne({ _id: userId });
+        const currentMesh = await dbFindOne({ _id: meshId });
         
-        if (!hasAccess) {
+        // Check if admin already has access to this mesh (check both directions)
+        const userHasMeshLink = currentAdmin?.links && currentAdmin.links[meshId];
+        const meshHasUserLink = currentMesh?.links && currentMesh.links[userKey];
+        
+        if (!userHasMeshLink) {
           // Add mesh link to user record
           const userUpdate = {};
           userUpdate['links.' + meshId] = { rights: 4294967295 };
           await dbUpdate({ _id: userId }, { $set: userUpdate });
-          
+          updates++;
+          console.log(`Added mesh ${mesh.name} to user ${userEmail}`);
+        }
+        
+        if (!meshHasUserLink) {
           // Add user link to mesh record
           const meshUpdate = {};
           meshUpdate['links.' + userKey] = { name: userEmail, rights: 4294967295 };
           await dbUpdate({ _id: meshId }, { $set: meshUpdate });
-          
-          updates++;
-          console.log(`Added ${userEmail} to mesh ${mesh.name}`);
+          if (userHasMeshLink) updates++; // Only count if we didn't already count above
+          console.log(`Added user ${userEmail} to mesh ${mesh.name}`);
         }
       }
     }

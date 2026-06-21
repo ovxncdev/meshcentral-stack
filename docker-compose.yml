@@ -64,6 +64,7 @@ services:
     
     networks:
       - internal
+      - external
     
     # Internal ports (nginx connects to these)
     expose:
